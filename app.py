@@ -112,8 +112,8 @@ def fetch_latest_data(tickers):
         return pd.DataFrame()
         
     final_df = pd.concat(latest_rows)
-    # Liquidity filter
-    final_df = final_df[(final_df['Close'] >= 5) & (final_df['volume_avg_20'] >= 1000000)]
+    # UPDATED: Lowered volume to 250k and price to 1 to accommodate European markets
+    final_df = final_df[(final_df['Close'] >= 1) & (final_df['volume_avg_20'] >= 250000)]
     return final_df
 
 # ==========================================
@@ -247,20 +247,24 @@ if st.sidebar.button("🚀 Run Live Scan"):
                     
                 with tab2:
                     st.subheader("Top 20: ChatGPT Model (Trend Focus)")
-                    chatgpt_top = live_data.sort_values('ChatGPT_Score', ascending=False).head(20)
+                    # FIX: Added Average_Rank as a tie-breaker
+                    chatgpt_top = live_data.sort_values(by=['ChatGPT_Score', 'Average_Rank'], ascending=[False, True]).head(20)
                     st.dataframe(chatgpt_top[['Ticker', 'Company', 'ChatGPT_Score', 'Close', 'rsi', 'rvol', 'ret_5d']].reset_index(drop=True), use_container_width=True)
                     
                 with tab3:
                     st.subheader("Top 20: Grok Model (Breakout Focus)")
-                    grok_top = live_data.sort_values('Grok_Score', ascending=False).head(20)
+                    # FIX: Added Average_Rank as a tie-breaker
+                    grok_top = live_data.sort_values(by=['Grok_Score', 'Average_Rank'], ascending=[False, True]).head(20)
                     st.dataframe(grok_top[['Ticker', 'Company', 'Grok_Score', 'Close', 'rsi', 'rvol', 'ret_5d']].reset_index(drop=True), use_container_width=True)
                     
                 with tab4:
                     st.subheader("Top 20: Gemini Model (Volume & Catalyst Focus)")
-                    gemini_top = live_data.sort_values('Gemini_Score', ascending=False).head(20)
+                    # FIX: Added Average_Rank as a tie-breaker
+                    gemini_top = live_data.sort_values(by=['Gemini_Score', 'Average_Rank'], ascending=[False, True]).head(20)
                     st.dataframe(gemini_top[['Ticker', 'Company', 'Gemini_Score', 'Close', 'rsi', 'rvol', 'ret_5d']].reset_index(drop=True), use_container_width=True)
                     
                 with tab5:
                     st.subheader("Top 20: Hybrid V2 Model (Best-of-All)")
-                    hybrid_top = live_data.sort_values('Hybrid_Score', ascending=False).head(20)
+                    # FIX: Added Average_Rank as a tie-breaker
+                    hybrid_top = live_data.sort_values(by=['Hybrid_Score', 'Average_Rank'], ascending=[False, True]).head(20)
                     st.dataframe(hybrid_top[['Ticker', 'Company', 'Hybrid_Score', 'Close', 'rsi', 'rvol', 'ret_5d']].reset_index(drop=True), use_container_width=True)

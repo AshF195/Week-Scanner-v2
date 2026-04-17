@@ -9,38 +9,47 @@ import os
 warnings.filterwarnings('ignore')
 
 # ==========================================
-# 1. MARKET DATA UNIVERSE (Local Files)
+# 1. MARKET DATA UNIVERSE (Local CSV Files)
 # ==========================================
 @st.cache_data
-def get_tickers(markets):
-    """Loads tickers from local text files."""
+def get_tickers_and_names(markets):
+    """Loads tickers and company names from local CSV files."""
     tickers = []
+    ticker_map = {} 
     
     file_map = {
-        "S&P 500": "sp500.txt",
-        "NASDAQ 100": "nasdaq100.txt",
-        "Dow Jones": "dow_jones.txt"
+        "S&P 500": "sp500.csv",
+        "S&P 400 (MidCap)": "sp400.csv",
+        "S&P 600 (SmallCap)": "sp600.csv",
+        "NASDAQ 100": "nasdaq100.csv",
+        "Dow Jones": "dow_jones.csv",
+        "FTSE 100": "ftse100.csv",
+        "FTSE 250": "ftse250.csv",
+        "CAC 40": "cac40.csv",
+        "DAX 40": "dax.csv",
+        "GETTEX (Manual)": "gettex.csv"
     }
     
     for market in markets:
         filename = file_map.get(market)
         if filename:
             try:
-                with open(filename, 'r') as f:
-                    # Read lines, strip whitespace/newlines, and ignore empty lines
-                    market_tickers = [line.strip() for line in f if line.strip()]
-                    tickers.extend(market_tickers)
+                df = pd.read_csv(filename)
+                for _, row in df.iterrows():
+                    t = str(row['Ticker'])
+                    tickers.append(t)
+                    ticker_map[t] = str(row['Company'])
             except FileNotFoundError:
-                st.error(f"⚠️ Could not find '{filename}'. Ensure it is in the same folder as app.py.")
+                st.error(f"⚠️ Could not find '{filename}'. Ensure it is uploaded to your GitHub repo.")
                 
-    # Remove duplicates if multiple markets are selected
+    # Remove duplicate tickers, but keep our dictionary map
     tickers = list(set(tickers))
-    return tickers
+    return tickers, ticker_map
 
 # ==========================================
 # 2. DATA FETCHING (4 Workers) & INDICATORS
 # ==========================================
-@st.cache_data(ttl=3600) # Cache live data for 1 hour
+@st.cache_data(ttl=3600) # Cache live data for 1 hour to prevent API bans
 def fetch_latest_data(tickers):
     """Fetches the last 6 months of data using exactly 4 concurrent workers."""
     # yfinance natively supports ThreadPoolExecutor via threads=4
@@ -91,7 +100,7 @@ def fetch_latest_data(tickers):
             df['post_earnings'] = (df['rvol'] > 3.0) & (df['ret_5d'] > 0.05)
             df['short_interest_proxy'] = (df['Close'] < df['ma_50']) & (df['rvol'] > 2.0)
             
-            # Extract ONLY the most recent trading day
+            # Extract ONLY the most recent trading day for the scanner
             latest_day = df.iloc[-1:].copy()
             latest_day['Ticker'] = ticker
             latest_rows.append(latest_day)
@@ -164,13 +173,18 @@ def score_hybrid(df):
 st.set_page_config(page_title="V2 Market Scanner", layout="wide")
 
 st.title("⚡ V2 Live Market Scanner")
-st.markdown("Scan major markets and generate consensus momentum picks using 4 AI models.")
+st.markdown("Scan major global markets and generate consensus momentum picks using 4 AI models.")
 
 # Sidebar Settings
 st.sidebar.header("Scanner Settings")
+market_options = [
+    "S&P 500", "S&P 400 (MidCap)", "S&P 600 (SmallCap)", 
+    "NASDAQ 100", "Dow Jones", 
+    "FTSE 100", "FTSE 250", "CAC 40", "DAX 40", "GETTEX (Manual)"
+]
 selected_markets = st.sidebar.multiselect(
     "Select Markets to Scan:",
-    ["S&P 500", "NASDAQ 100", "Dow Jones"],
+    market_options,
     default=["NASDAQ 100"]
 )
 
@@ -179,10 +193,10 @@ if st.sidebar.button("🚀 Run Live Scan"):
         st.warning("Please select at least one market.")
     else:
         with st.spinner("Loading tickers from local files..."):
-            tickers = get_tickers(selected_markets)
+            tickers, ticker_map = get_tickers_and_names(selected_markets)
             
         if not tickers:
-            st.error("No tickers loaded. Check your .txt files.")
+            st.error("No tickers loaded. Check that your .csv files are uploaded.")
         else:
             st.sidebar.success(f"Loaded {len(tickers)} tickers.")
             
@@ -193,28 +207,30 @@ if st.sidebar.button("🚀 Run Live Scan"):
                 st.error("Failed to fetch data or no stocks met the minimum liquidity requirements.")
             else:
                 with st.spinner("Calculating AI Scores..."):
-                    # Apply scoring
+                    # Map the company names to the dataframe
+                    live_data['Company'] = live_data['Ticker'].map(ticker_map)
+                    
                     live_data['ChatGPT_Score'] = score_chatgpt(live_data)
                     live_data['Grok_Score'] = score_grok(live_data)
                     live_data['Gemini_Score'] = score_gemini(live_data)
                     live_data['Hybrid_Score'] = score_hybrid(live_data)
                     
-                    # Calculate rankings for consensus (method='min' means ties get the same top rank)
+                    # Ranks (method='min' means ties get the same top rank)
                     live_data['Rank_ChatGPT'] = live_data['ChatGPT_Score'].rank(ascending=False, method='min')
                     live_data['Rank_Grok'] = live_data['Grok_Score'].rank(ascending=False, method='min')
                     live_data['Rank_Gemini'] = live_data['Gemini_Score'].rank(ascending=False, method='min')
                     live_data['Rank_Hybrid'] = live_data['Hybrid_Score'].rank(ascending=False, method='min')
                     
-                    # Master Average Rank (Lower is better)
+                    # Master Average Rank
                     live_data['Average_Rank'] = live_data[['Rank_ChatGPT', 'Rank_Grok', 'Rank_Gemini', 'Rank_Hybrid']].mean(axis=1)
                     
-                    # Rounding formatting for cleaner display
+                    # Formatting
                     live_data['Close'] = live_data['Close'].round(2)
                     live_data['rsi'] = live_data['rsi'].round(2)
                     live_data['rvol'] = live_data['rvol'].round(2)
                     live_data['ret_5d'] = (live_data['ret_5d'] * 100).round(2).astype(str) + '%'
                     
-                    display_cols = ['Ticker', 'Close', 'rsi', 'rvol', 'ret_5d']
+                    display_cols = ['Ticker', 'Company', 'Close', 'rsi', 'rvol', 'ret_5d']
                     
                 st.success(f"Scan complete for {len(live_data)} qualifying stocks. Prices as of last close.")
                 
@@ -227,24 +243,24 @@ if st.sidebar.button("🚀 Run Live Scan"):
                     st.subheader("Top 20: Master Consensus Ranking")
                     st.markdown("Sorted by the lowest average rank across all four models.")
                     master = live_data.sort_values('Average_Rank', ascending=True).head(20)
-                    st.dataframe(master[['Ticker', 'Average_Rank', 'Rank_ChatGPT', 'Rank_Grok', 'Rank_Gemini', 'Rank_Hybrid', 'Close', 'rvol']].reset_index(drop=True), use_container_width=True)
+                    st.dataframe(master[['Ticker', 'Company', 'Average_Rank', 'Rank_ChatGPT', 'Rank_Grok', 'Rank_Gemini', 'Rank_Hybrid', 'Close', 'rvol']].reset_index(drop=True), use_container_width=True)
                     
                 with tab2:
                     st.subheader("Top 20: ChatGPT Model (Trend Focus)")
                     chatgpt_top = live_data.sort_values('ChatGPT_Score', ascending=False).head(20)
-                    st.dataframe(chatgpt_top[['Ticker', 'ChatGPT_Score'] + display_cols].reset_index(drop=True), use_container_width=True)
+                    st.dataframe(chatgpt_top[['Ticker', 'Company', 'ChatGPT_Score', 'Close', 'rsi', 'rvol', 'ret_5d']].reset_index(drop=True), use_container_width=True)
                     
                 with tab3:
                     st.subheader("Top 20: Grok Model (Breakout Focus)")
                     grok_top = live_data.sort_values('Grok_Score', ascending=False).head(20)
-                    st.dataframe(grok_top[['Ticker', 'Grok_Score'] + display_cols].reset_index(drop=True), use_container_width=True)
+                    st.dataframe(grok_top[['Ticker', 'Company', 'Grok_Score', 'Close', 'rsi', 'rvol', 'ret_5d']].reset_index(drop=True), use_container_width=True)
                     
                 with tab4:
                     st.subheader("Top 20: Gemini Model (Volume & Catalyst Focus)")
                     gemini_top = live_data.sort_values('Gemini_Score', ascending=False).head(20)
-                    st.dataframe(gemini_top[['Ticker', 'Gemini_Score'] + display_cols].reset_index(drop=True), use_container_width=True)
+                    st.dataframe(gemini_top[['Ticker', 'Company', 'Gemini_Score', 'Close', 'rsi', 'rvol', 'ret_5d']].reset_index(drop=True), use_container_width=True)
                     
                 with tab5:
                     st.subheader("Top 20: Hybrid V2 Model (Best-of-All)")
                     hybrid_top = live_data.sort_values('Hybrid_Score', ascending=False).head(20)
-                    st.dataframe(hybrid_top[['Ticker', 'Hybrid_Score'] + display_cols].reset_index(drop=True), use_container_width=True)
+                    st.dataframe(hybrid_top[['Ticker', 'Company', 'Hybrid_Score', 'Close', 'rsi', 'rvol', 'ret_5d']].reset_index(drop=True), use_container_width=True)

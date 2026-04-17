@@ -113,7 +113,7 @@ def fetch_latest_data(tickers):
         
     final_df = pd.concat(latest_rows)
     # UPDATED: Lowered volume to 250k and price to 1 to accommodate European markets
-    final_df = final_df[(final_df['Close'] >= 1) & (final_df['volume_avg_20'] >= 250000)]
+    final_df = final_df[(final_df['Close'] >= 1) & (final_df['volume_avg_20'] >= 100000)]
     return final_df
 
 # ==========================================

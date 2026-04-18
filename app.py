@@ -109,6 +109,7 @@ def get_tickers_and_names(markets):
         "FTSE 100": ("ftse100.csv", ".L"), "FTSE 250": ("ftse250.csv", ".L"), 
         "CAC 40": ("cac40.csv", ".PA"), "DAX 40": ("dax.csv", ".DE"), "GETTEX (Manual)": ("gettex.csv", ".DE")
     }
+    
     for market in markets:
         market_info = file_map.get(market)
         if market_info:
@@ -116,17 +117,22 @@ def get_tickers_and_names(markets):
             try:
                 df = pd.read_csv(filename)
                 for _, row in df.iterrows():
-                    # Force uppercase and strip spaces to prevent errors like "sap.de " -> "SAP.DE .DE"
                     t = str(row['Ticker']).strip().upper()
                     
-                    # Smart append: If it already has a dot, we assume it's already properly formatted
-                    if suffix and "." not in t:
+                    # If this is an international market that needs a specific suffix
+                    if suffix:
+                        # 1. Chop off anything after a hyphen (fixes 'ADS-DE' -> 'ADS', 'AC-PA.PA' -> 'AC')
+                        t = t.split('-')[0]
+                        # 2. Chop off anything after a dot (fixes 'AZN.L' -> 'AZN')
+                        t = t.split('.')[0]
+                        # 3. Glue the clean base ticker to the correct Yahoo Finance suffix
                         t = f"{t}{suffix}"
                         
                     tickers.append(t)
                     ticker_map[t] = str(row['Company'])
             except FileNotFoundError:
                 st.error(f"⚠️ Could not find '{filename}'.")
+                
     return list(set(tickers)), ticker_map
 
 # ==========================================

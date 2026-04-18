@@ -408,7 +408,8 @@ def apply_rag_formatting(df):
         'ma_20': '{:.2f}', 'ma_50': '{:.2f}', 
         'ema_8': '{:.2f}', 'ema_21': '{:.2f}',
         'ma_20_slope': '{:.3f}', 'macd': '{:.3f}', 'macd_signal': '{:.3f}',
-        'volume_trend': '{:.0f}',
+        'volume_trend': '{:.0f}', 'vol_trend_norm': '{:.2f}',
+        'dist_ma50': '{:.3f}', 'ma_alignment': '{:.3f}', 'dist_high': '{:.3f}',
         'Average_Rank': '{:.0f}', 'Rank_ChatGPT': '{:.0f}',
         'Rank_Grok': '{:.0f}', 'Rank_Gemini': '{:.0f}', 'Rank_Hybrid': '{:.0f}',
         'Average_Rank_1M': '{:.0f}', 'Rank_ChatGPT_1M': '{:.0f}',
@@ -417,6 +418,7 @@ def apply_rag_formatting(df):
     
     safe_format_dict = {k: v for k, v in format_dict.items() if k in df.columns}
     return styler.format(safe_format_dict)
+
 
 # ==========================================
 # 6. STREAMLIT UI
@@ -498,19 +500,30 @@ if st.sidebar.button("🚀 Run Live Scan"):
                 master = live_data.sort_values('Average_Rank', ascending=True).head(20).copy()
                 master_1m = live_data.sort_values('Average_Rank_1M', ascending=True).head(20).copy()
                 
-                # NLP Sentiment (Applied to Short-Term Master only to preserve API performance)
+                # NLP Sentiment (Applied to Short-Term and 1-Month Master Top 20s)
                 nlp = load_finbert()
-                sentiments = []
-                sentiment_bar = st.progress(0, text="Analyzing Master Consensus News Sentiment...")
                 
+                # 1. Short-Term FinBERT Loop
+                sentiments = []
+                sentiment_bar = st.progress(0, text="Analyzing Short-Term Master News Sentiment...")
                 for idx, row in master.iterrows():
                     sent = analyze_sentiment(row['Ticker'], nlp)
                     sentiments.append(sent)
                     current_step = len(sentiments)
                     sentiment_bar.progress(current_step / 20, text=f"Analyzing News for {row['Ticker']} ({current_step}/20)...")
-                    
                 master['FinBERT_Sentiment'] = sentiments
                 sentiment_bar.empty()
+
+                # 2. 1-Month FinBERT Loop
+                sentiments_1m = []
+                sentiment_bar_1m = st.progress(0, text="Analyzing 1-Month Master News Sentiment...")
+                for idx, row in master_1m.iterrows():
+                    sent = analyze_sentiment(row['Ticker'], nlp)
+                    sentiments_1m.append(sent)
+                    current_step = len(sentiments_1m)
+                    sentiment_bar_1m.progress(current_step / 20, text=f"Analyzing News for {row['Ticker']} ({current_step}/20)...")
+                master_1m['FinBERT_Sentiment'] = sentiments_1m
+                sentiment_bar_1m.empty()
                 
                 st.success(f"Scan complete for {len(live_data)} qualifying stocks.")
                 
@@ -522,62 +535,72 @@ if st.sidebar.button("🚀 Run Live Scan"):
                 with tab1:
                     st.subheader("⚡ Short-Term (1-2 Weeks) Top 20")
                     master_cols = ['Ticker', 'Company', 'FinBERT_Sentiment', 'Average_Rank', 'Rank_ChatGPT', 'Rank_Grok', 'Rank_Gemini', 'Rank_Hybrid', 'Close', 'rsi', 'rvol', 'ret_5d']
-                    st.dataframe(apply_rag_formatting(master[master_cols]), use_container_width=True, hide_index=True)
+                    safe_master_cols = [c for c in master_cols if c in master.columns]
+                    st.dataframe(apply_rag_formatting(master[safe_master_cols]), use_container_width=True, hide_index=True)
                     
                     st.divider() 
                     
                     st.subheader("📅 Medium-Term (1 Month) Top 20")
-                    master_cols_1m = ['Ticker', 'Company', 'Average_Rank_1M', 'Rank_ChatGPT_1M', 'Rank_Grok_1M', 'Rank_Gemini_1M', 'Rank_Hybrid_1M', 'Close', 'rsi', 'rvol', 'ret_21d']
-                    st.dataframe(apply_rag_formatting(master_1m[master_cols_1m]), use_container_width=True, hide_index=True)
+                    master_cols_1m = ['Ticker', 'Company', 'FinBERT_Sentiment', 'Average_Rank_1M', 'Rank_ChatGPT_1M', 'Rank_Grok_1M', 'Rank_Gemini_1M', 'Rank_Hybrid_1M', 'Close', 'rsi', 'rvol', 'ret_21d']
+                    safe_master_cols_1m = [c for c in master_cols_1m if c in master_1m.columns]
+                    st.dataframe(apply_rag_formatting(master_1m[safe_master_cols_1m]), use_container_width=True, hide_index=True)
                     
                 with tab2:
                     st.subheader("⚡ Short-Term Trend Focus")
                     chatgpt_top = live_data.sort_values(by=['ChatGPT_Score', 'Average_Rank'], ascending=[False, True]).head(20)
                     cg_cols = ['Ticker', 'Company', 'Rank_ChatGPT', 'ChatGPT_Score', 'Close', 'ma_20', 'ma_20_slope', 'rsi', 'macd', 'macd_signal', 'rvol', 'volume_trend', 'ret_5d']
-                    st.dataframe(apply_rag_formatting(chatgpt_top[cg_cols]), use_container_width=True, hide_index=True)
+                    safe_cg_cols = [c for c in cg_cols if c in chatgpt_top.columns]
+                    st.dataframe(apply_rag_formatting(chatgpt_top[safe_cg_cols]), use_container_width=True, hide_index=True)
                     
                     st.divider()
                     
-                    st.subheader("📅 1-Month Trend Focus")
+                    st.subheader("📅 1-Month Trend Focus (Transparent Scoring)")
                     chatgpt_top_1m = live_data.sort_values(by=['ChatGPT_Score_1M', 'Average_Rank_1M'], ascending=[False, True]).head(20)
-                    cg_cols_1m = ['Ticker', 'Company', 'Rank_ChatGPT_1M', 'ChatGPT_Score_1M', 'Close', 'ma_50', 'rsi', 'rvol', 'ret_21d']
-                    st.dataframe(apply_rag_formatting(chatgpt_top_1m[cg_cols_1m]), use_container_width=True, hide_index=True)
+                    cg_cols_1m = ['Ticker', 'Company', 'Rank_ChatGPT_1M', 'ChatGPT_Score_1M', 'Close', 'ma_50', 'dist_ma50', 'ma_alignment', 'ret_21d', 'momentum_balance', 'rsi', 'rvol', 'volume_trend', 'vol_trend_norm', 'dist_high']
+                    safe_cg_cols_1m = [c for c in cg_cols_1m if c in chatgpt_top_1m.columns]
+                    st.dataframe(apply_rag_formatting(chatgpt_top_1m[safe_cg_cols_1m]), use_container_width=True, hide_index=True)
                     
                 with tab3:
                     st.subheader("⚡ Short-Term Breakout Focus")
                     grok_top = live_data.sort_values(by=['Grok_Score', 'Average_Rank'], ascending=[False, True]).head(20)
                     grok_cols = ['Ticker', 'Company', 'Rank_Grok', 'Grok_Score', 'Close', 'ma_20', 'ma_50', 'near_high', 'rvol', 'ret_5d', 'ret_10d']
-                    st.dataframe(apply_rag_formatting(grok_top[grok_cols]), use_container_width=True, hide_index=True)
+                    safe_grok_cols = [c for c in grok_cols if c in grok_top.columns]
+                    st.dataframe(apply_rag_formatting(grok_top[safe_grok_cols]), use_container_width=True, hide_index=True)
                     
                     st.divider()
                     
-                    st.subheader("📅 1-Month Breakout Focus")
+                    st.subheader("📅 1-Month Breakout Focus (Transparent Scoring)")
                     grok_top_1m = live_data.sort_values(by=['Grok_Score_1M', 'Average_Rank_1M'], ascending=[False, True]).head(20)
-                    grok_cols_1m = ['Ticker', 'Company', 'Rank_Grok_1M', 'Grok_Score_1M', 'Close', 'ma_50', 'near_high', 'ret_21d']
-                    st.dataframe(apply_rag_formatting(grok_top_1m[grok_cols_1m]), use_container_width=True, hide_index=True)
+                    grok_cols_1m = ['Ticker', 'Company', 'Rank_Grok_1M', 'Grok_Score_1M', 'Close', 'ret_21d', 'momentum_acceleration', 'ma_50', 'dist_ma50', 'ma_alignment', 'near_high', 'dist_high', 'rsi', 'rvol', 'vol_trend_norm']
+                    safe_grok_cols_1m = [c for c in grok_cols_1m if c in grok_top_1m.columns]
+                    st.dataframe(apply_rag_formatting(grok_top_1m[safe_grok_cols_1m]), use_container_width=True, hide_index=True)
                     
                 with tab4:
                     st.subheader("⚡ Short-Term Catalyst Focus")
                     gemini_top = live_data.sort_values(by=['Gemini_Score', 'Average_Rank'], ascending=[False, True]).head(20)
                     gem_cols = ['Ticker', 'Company', 'Rank_Gemini', 'Gemini_Score', 'Close', 'ema_8', 'ema_21', 'macd', 'macd_signal', 'rsi', 'rvol', 'close_near_high', 'post_earnings']
-                    st.dataframe(apply_rag_formatting(gemini_top[gem_cols]), use_container_width=True, hide_index=True)
+                    safe_gem_cols = [c for c in gem_cols if c in gemini_top.columns]
+                    st.dataframe(apply_rag_formatting(gemini_top[safe_gem_cols]), use_container_width=True, hide_index=True)
 
                     st.divider()
                     
-                    st.subheader("📅 1-Month Squeeze Focus")
+                    st.subheader("📅 1-Month Squeeze Focus (Transparent Scoring)")
                     gemini_top_1m = live_data.sort_values(by=['Gemini_Score_1M', 'Average_Rank_1M'], ascending=[False, True]).head(20)
-                    gem_cols_1m = ['Ticker', 'Company', 'Rank_Gemini_1M', 'Gemini_Score_1M', 'Close', 'ema_21', 'ma_50', 'rsi', 'volume_trend', 'ret_21d']
-                    st.dataframe(apply_rag_formatting(gemini_top_1m[gem_cols_1m]), use_container_width=True, hide_index=True)
+                    gem_cols_1m = ['Ticker', 'Company', 'Rank_Gemini_1M', 'Gemini_Score_1M', 'Close', 'ema_21', 'ma_50', 'dist_ma50', 'ma_alignment', 'rsi', 'volume_trend', 'vol_trend_norm', 'rvol', 'ret_21d']
+                    safe_gem_cols_1m = [c for c in gem_cols_1m if c in gemini_top_1m.columns]
+                    st.dataframe(apply_rag_formatting(gemini_top_1m[safe_gem_cols_1m]), use_container_width=True, hide_index=True)
                     
                 with tab5:
                     st.subheader("⚡ Short-Term Best-of-All")
                     hybrid_top = live_data.sort_values(by=['Hybrid_Score', 'Average_Rank'], ascending=[False, True]).head(20)
                     hyb_cols = ['Ticker', 'Company', 'Rank_Hybrid', 'Hybrid_Score', 'Close', 'ma_20', 'ma_20_slope', 'macd', 'macd_signal', 'rsi', 'rvol', 'near_high', 'post_earnings', 'ret_5d', 'ret_10d']
-                    st.dataframe(apply_rag_formatting(hybrid_top[hyb_cols]), use_container_width=True, hide_index=True)
+                    safe_hyb_cols = [c for c in hyb_cols if c in hybrid_top.columns]
+                    st.dataframe(apply_rag_formatting(hybrid_top[safe_hyb_cols]), use_container_width=True, hide_index=True)
 
                     st.divider()
                     
-                    st.subheader("📅 1-Month Best-of-All")
+                    st.subheader("📅 1-Month Best-of-All (Transparent Scoring)")
                     hybrid_top_1m = live_data.sort_values(by=['Hybrid_Score_1M', 'Average_Rank_1M'], ascending=[False, True]).head(20)
-                    hyb_cols_1m = ['Ticker', 'Company', 'Rank_Hybrid_1M', 'Hybrid_Score_1M', 'Close', 'ma_50', 'rsi', 'rvol', 'ret_21d']
-                    st.dataframe(apply_rag_formatting(hybrid_top_1m[hyb_cols_1m]), use_container_width=True, hide_index=True)
+                    hyb_cols_1m = ['Ticker', 'Company', 'Rank_Hybrid_1M', 'Hybrid_Score_1M', 'Close', 'ma_50', 'dist_ma50', 'ma_alignment', 'ret_21d', 'momentum_balance', 'rsi', 'rvol', 'vol_trend_norm', 'dist_high']
+                    safe_hyb_cols_1m = [c for c in hyb_cols_1m if c in hybrid_top_1m.columns]
+                    st.dataframe(apply_rag_formatting(hybrid_top_1m[safe_hyb_cols_1m]), use_container_width=True, hide_index=True)

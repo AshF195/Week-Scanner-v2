@@ -401,7 +401,10 @@ if st.sidebar.button("🚀 Run Live Scan"):
                 with tab1:
                     st.subheader("👑 Top 20: Master Consensus + News Sentiment")
                     st.markdown("Sorted by the lowest average rank. **Sentiment is calculated from the last 5 news headlines.**")
-                    master_cols = ['Ticker', 'Company', 'FinBERT_Sentiment', 'Average_Rank', 'Rank_ChatGPT', 'Rank_Grok', 'Rank_Gemini', 'Close', 'rsi', 'rvol', 'ret_5d']
+                    
+                    # Added 'Rank_Hybrid' right after 'Rank_Gemini'
+                    master_cols = ['Ticker', 'Company', 'FinBERT_Sentiment', 'Average_Rank', 'Rank_ChatGPT', 'Rank_Grok', 'Rank_Gemini', 'Rank_Hybrid', 'Close', 'rsi', 'rvol', 'ret_5d']
+                    
                     st.dataframe(apply_rag_formatting(master[master_cols]), use_container_width=True, hide_index=True)
                     
                 with tab2:

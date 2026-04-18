@@ -225,52 +225,116 @@ def fetch_latest_data(tickers):
         
     final_df = pd.concat(latest_rows)
     return final_df[(final_df['Close'] >= 1) & (final_df['volume_avg_20'] >= 250000)]
+
 # ==========================================
-# 4. SCORING MODELS
+# 4. SCORING MODELS (SCALED / CONTINUOUS)
 # ==========================================
+import numpy as np
+import pandas as pd
+
 def score_chatgpt(df):
-    s = pd.Series(0, index=df.index)
-    s += np.where(df['Close'] > df['ma_20'], 10, 0)
-    s += np.where(df['ma_20_slope'] > 0, 10, 0)
-    s += np.where((df['Close'] - df['ma_20']) / df['ma_20'] < 0.08, 10, 0)
-    s += np.where((df['rsi'] >= 55) & (df['rsi'] <= 70), 10, 0)
-    s += np.where(df['ret_5d'] > 0, 5, 0)
-    s += np.where(df['macd'] > df['macd_signal'], 5, 0)
-    s += np.where(df['rvol'] >= 1.5, 15, 0)
-    s += np.where(df['volume_trend'] > 0, 10, 0)
-    s -= np.where(df['ret_5d'] > 0.15, 15, 0)
+    s = pd.Series(0.0, index=df.index)
+
+    dist_ma = (df['Close'] - df['ma_20']) / df['ma_20']
+
+    # Trend (scaled)
+    s += np.clip(dist_ma * 100, 0, 10)
+    s += np.clip(df['ma_20_slope'] * 10, 0, 10)
+
+    # Penalise overextension
+    s -= np.clip((dist_ma - 0.08) * 100, 0, 10)
+
+    # RSI sweet spot (peaks ~62)
+    s += 10 - np.abs(df['rsi'] - 62) * 0.4
+
+    # Momentum
+    s += np.clip(df['ret_5d'] * 100, 0, 10)
+
+    # MACD strength
+    macd_diff = df['macd'] - df['macd_signal']
+    s += np.clip(macd_diff * 50, 0, 5)
+
+    # Volume
+    s += np.clip((df['rvol'] - 1) * 10, 0, 15)
+    s += np.clip(df['volume_trend'] * 10, 0, 10)
+
     return s
+
 
 def score_grok(df):
-    s = pd.Series(0, index=df.index)
-    s += np.where(df['ret_5d'] > 0, 10, 0)
-    s += np.where(df['ret_10d'] > df['ret_5d'], 5, 0)
-    s += np.where(df['rvol'] >= 1.5, 10, 0)
-    s += np.where(df['Close'] > df['ma_20'], 5, 0)
-    s += np.where(df['ma_20'] > df['ma_50'], 5, 0)
-    s += np.where(df['near_high'], 10, 0)
+    s = pd.Series(0.0, index=df.index)
+
+    # Momentum
+    s += np.clip(df['ret_5d'] * 100, 0, 15)
+    s += np.clip((df['ret_10d'] - df['ret_5d']) * 100, 0, 10)
+
+    # Volume
+    s += np.clip((df['rvol'] - 1) * 10, 0, 15)
+
+    # Trend
+    s += np.clip((df['Close'] - df['ma_20']) / df['ma_20'] * 50, 0, 10)
+    s += np.clip((df['ma_20'] - df['ma_50']) / df['ma_50'] * 50, 0, 10)
+
+    # Breakout proximity
+    dist_high = df['Close'] / df['high_50d']
+    s += np.clip((dist_high - 0.9) * 50, 0, 10)
+
     return s
+
 
 def score_gemini(df):
-    s = pd.Series(0, index=df.index)
-    s += np.where(df['ema_8'] > df['ema_21'], 15, 0)
-    s += np.where(df['macd'] > df['macd_signal'], 15, 0)
-    s += np.where((df['rsi'] >= 50) & (df['rsi'] <= 70), 10, 0)
-    s += np.where(df['rvol'] >= 1.5, 20, np.where(df['rvol'] >= 1.2, 10, 0))
-    s += np.where(df['close_near_high'], 20, 0)
+    s = pd.Series(0.0, index=df.index)
+
+    # EMA strength
+    ema_gap = (df['ema_8'] - df['ema_21']) / df['ema_21']
+    s += np.clip(ema_gap * 100, 0, 15)
+
+    # MACD
+    macd_diff = df['macd'] - df['macd_signal']
+    s += np.clip(macd_diff * 50, 0, 15)
+
+    # RSI
+    s += 10 - np.abs(df['rsi'] - 60) * 0.3
+
+    # RVOL (scaled)
+    s += np.clip((df['rvol'] - 1) * 20, 0, 25)
+
+    # Close strength
+    close_pos = (df['Close'] - df['Low']) / (df['High'] - df['Low'])
+    s += close_pos * 20
+
+    # Catalyst proxy
     s += np.where(df['post_earnings'], 10, 0)
+
     return s
 
+
 def score_hybrid(df):
-    s = pd.Series(0, index=df.index)
-    s += np.where(df['Close'] > df['ma_20'], 5, 0)
-    s += np.where(df['ma_20_slope'] > 0, 5, 0)
-    s += np.where((df['rsi'] >= 55) & (df['rsi'] <= 70), 8, 0)
-    s += np.where(df['macd'] > df['macd_signal'], 6, 0)
-    s += np.where(df['ret_10d'] > df['ret_5d'], 6, 0)
-    s += np.where(df['rvol'] >= 1.5, 10, 0)
-    s += np.where(df['near_high'], 5, 0)
+    s = pd.Series(0.0, index=df.index)
+
+    dist_ma = (df['Close'] - df['ma_20']) / df['ma_20']
+
+    # Trend
+    s += np.clip(dist_ma * 50, 0, 10)
+    s += np.clip(df['ma_20_slope'] * 10, 0, 10)
+
+    # Momentum
+    s += np.clip(df['ret_5d'] * 100, 0, 10)
+    s += np.clip((df['ret_10d'] - df['ret_5d']) * 100, 0, 10)
+
+    # RSI
+    s += 10 - np.abs(df['rsi'] - 60) * 0.3
+
+    # Volume
+    s += np.clip((df['rvol'] - 1) * 15, 0, 15)
+
+    # Breakout proximity
+    dist_high = df['Close'] / df['high_50d']
+    s += np.clip((dist_high - 0.9) * 50, 0, 10)
+
+    # Catalyst
     s += np.where(df['post_earnings'], 10, 0)
+
     return s
 
 # ==========================================

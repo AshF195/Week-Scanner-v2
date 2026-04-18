@@ -101,24 +101,14 @@ def analyze_sentiment(ticker, nlp_pipe):
 # 2. MARKET DATA UNIVERSE
 # ==========================================
 @st.cache_data
-@st.cache_data
 def get_tickers_and_names(markets):
     tickers, ticker_map = [], {}
-    
-    # Updated map to include the required Yahoo Finance suffix for each market
     file_map = {
-        "S&P 500": ("sp500.csv", ""), 
-        "S&P 400 (MidCap)": ("sp400.csv", ""), 
-        "S&P 600 (SmallCap)": ("sp600.csv", ""),
-        "NASDAQ 100": ("nasdaq100.csv", ""), 
-        "Dow Jones": ("dow_jones.csv", ""), 
-        "FTSE 100": ("ftse100.csv", ".L"), 
-        "FTSE 250": ("ftse250.csv", ".L"), 
-        "CAC 40": ("cac40.csv", ".PA"), 
-        "DAX 40": ("dax.csv", ".DE"), 
-        "GETTEX (Manual)": ("gettex.csv", ".DE") # Defaulting to .DE for German liquidity
+        "S&P 500": ("sp500.csv", ""), "S&P 400 (MidCap)": ("sp400.csv", ""), "S&P 600 (SmallCap)": ("sp600.csv", ""),
+        "NASDAQ 100": ("nasdaq100.csv", ""), "Dow Jones": ("dow_jones.csv", ""), 
+        "FTSE 100": ("ftse100.csv", ".L"), "FTSE 250": ("ftse250.csv", ".L"), 
+        "CAC 40": ("cac40.csv", ".PA"), "DAX 40": ("dax.csv", ".DE"), "GETTEX (Manual)": ("gettex.csv", ".DE")
     }
-    
     for market in markets:
         market_info = file_map.get(market)
         if market_info:
@@ -126,18 +116,17 @@ def get_tickers_and_names(markets):
             try:
                 df = pd.read_csv(filename)
                 for _, row in df.iterrows():
-                    # Clean up any accidental spaces in the CSV
-                    t = str(row['Ticker']).strip()
+                    # Force uppercase and strip spaces to prevent errors like "sap.de " -> "SAP.DE .DE"
+                    t = str(row['Ticker']).strip().upper()
                     
-                    # Auto-append the suffix if it belongs to an EU market AND doesn't already have it
-                    if suffix and not t.endswith(suffix):
+                    # Smart append: If it already has a dot, we assume it's already properly formatted
+                    if suffix and "." not in t:
                         t = f"{t}{suffix}"
                         
                     tickers.append(t)
                     ticker_map[t] = str(row['Company'])
             except FileNotFoundError:
                 st.error(f"⚠️ Could not find '{filename}'.")
-                
     return list(set(tickers)), ticker_map
 
 # ==========================================
@@ -224,7 +213,7 @@ def fetch_latest_data(tickers):
         return pd.DataFrame()
         
     final_df = pd.concat(latest_rows)
-    return final_df[(final_df['Close'] >= 1) & (final_df['volume_avg_20'] >= 250000)]
+    return final_df[(final_df['Close'] >= 1) & (final_df['volume_avg_20'] >= 50000)]
 
 # ==========================================
 # 4. SCORING MODELS (SCALED / CONTINUOUS)
@@ -234,8 +223,7 @@ import pandas as pd
 
 def score_chatgpt(df):
     s = pd.Series(0.0, index=df.index)
-
-    dist_ma = (df['Close'] - df['ma_20']) / df['ma_20']
+    dist_ma = (df['Close'] - df['ma_20']) / (df['ma_20'] + 1e-9)
 
     # Trend (scaled)
     s += np.clip(dist_ma * 100, 0, 10)
@@ -257,9 +245,7 @@ def score_chatgpt(df):
     # Volume
     s += np.clip((df['rvol'] - 1) * 10, 0, 15)
     s += np.clip(df['volume_trend'] * 10, 0, 10)
-
     return s
-
 
 def score_grok(df):
     s = pd.Series(0.0, index=df.index)
@@ -272,21 +258,19 @@ def score_grok(df):
     s += np.clip((df['rvol'] - 1) * 10, 0, 15)
 
     # Trend
-    s += np.clip((df['Close'] - df['ma_20']) / df['ma_20'] * 50, 0, 10)
-    s += np.clip((df['ma_20'] - df['ma_50']) / df['ma_50'] * 50, 0, 10)
+    s += np.clip((df['Close'] - df['ma_20']) / (df['ma_20'] + 1e-9) * 50, 0, 10)
+    s += np.clip((df['ma_20'] - df['ma_50']) / (df['ma_50'] + 1e-9) * 50, 0, 10)
 
-    # Breakout proximity
-    dist_high = df['Close'] / df['high_50d']
+    # Breakout proximity (added 1e-9 to prevent divide by zero)
+    dist_high = df['Close'] / (df['high_50d'] + 1e-9)
     s += np.clip((dist_high - 0.9) * 50, 0, 10)
-
     return s
-
 
 def score_gemini(df):
     s = pd.Series(0.0, index=df.index)
 
     # EMA strength
-    ema_gap = (df['ema_8'] - df['ema_21']) / df['ema_21']
+    ema_gap = (df['ema_8'] - df['ema_21']) / (df['ema_21'] + 1e-9)
     s += np.clip(ema_gap * 100, 0, 15)
 
     # MACD
@@ -299,20 +283,17 @@ def score_gemini(df):
     # RVOL (scaled)
     s += np.clip((df['rvol'] - 1) * 20, 0, 25)
 
-    # Close strength
-    close_pos = (df['Close'] - df['Low']) / (df['High'] - df['Low'])
+    # Close strength (added 1e-9 to prevent divide by zero on zero-range days)
+    close_pos = (df['Close'] - df['Low']) / (df['High'] - df['Low'] + 1e-9)
     s += close_pos * 20
 
     # Catalyst proxy
     s += np.where(df['post_earnings'], 10, 0)
-
     return s
-
 
 def score_hybrid(df):
     s = pd.Series(0.0, index=df.index)
-
-    dist_ma = (df['Close'] - df['ma_20']) / df['ma_20']
+    dist_ma = (df['Close'] - df['ma_20']) / (df['ma_20'] + 1e-9)
 
     # Trend
     s += np.clip(dist_ma * 50, 0, 10)
@@ -329,12 +310,11 @@ def score_hybrid(df):
     s += np.clip((df['rvol'] - 1) * 15, 0, 15)
 
     # Breakout proximity
-    dist_high = df['Close'] / df['high_50d']
+    dist_high = df['Close'] / (df['high_50d'] + 1e-9)
     s += np.clip((dist_high - 0.9) * 50, 0, 10)
 
     # Catalyst
     s += np.where(df['post_earnings'], 10, 0)
-
     return s
 
 # ==========================================

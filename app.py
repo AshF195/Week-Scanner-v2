@@ -225,36 +225,49 @@ def score_hybrid(df):
 # ==========================================
 def color_rsi(val):
     if pd.isna(val): return ''
-    if 50 <= val <= 70: return 'color: #00FF00' 
-    elif val > 70 or 40 <= val < 50: return 'color: #FFA500' 
-    return 'color: #FF0000' 
+    if 50 <= val <= 70: return 'color: #00FF00' # Green (Bullish zone)
+    elif val > 70 or 40 <= val < 50: return 'color: #FFA500' # Amber (Overbought/Neutral)
+    return 'color: #FF0000' # Red (Bearish)
 
 def color_rvol(val):
     if pd.isna(val): return ''
-    if val >= 1.5: return 'color: #00FF00' 
-    elif 1.0 <= val < 1.5: return 'color: #FFA500' 
-    return 'color: #FF0000' 
+    if val >= 1.5: return 'color: #00FF00' # Green (High vol)
+    elif 1.0 <= val < 1.5: return 'color: #FFA500' # Amber (Avg vol)
+    return 'color: #FF0000' # Red (Low vol)
 
 def color_ret(val):
     if pd.isna(val): return ''
-    if val >= 0.02: return 'color: #00FF00' 
-    elif val <= -0.02: return 'color: #FF0000' 
-    return 'color: #FFA500' 
+    if val >= 0.02: return 'color: #00FF00' # Green (> 2%)
+    elif val <= -0.02: return 'color: #FF0000' # Red (< -2%)
+    return 'color: #FFA500' # Amber (Chop)
 
 def apply_rag_formatting(df):
-    """Applies RAG colors and formats floats for display."""
-    return df.style.map(color_rsi, subset=['rsi']) \
-                   .map(color_rvol, subset=['rvol']) \
-                   .map(color_ret, subset=['ret_5d']) \
-                   .format({
-                       'Close': '{:.2f}',
-                       'rsi': '{:.1f}',
-                       'rvol': '{:.2f}',
-                       'ret_5d': '{:.2%}',
-                       'ret_10d': '{:.2%}',
-                       'ma_20': '{:.2f}',
-                       'ema_8': '{:.2f}'
-                   })
+    """Applies RAG colors and formats floats for display safely."""
+    styler = df.style
+    
+    # Safely apply color mapping only if the column exists in this specific view
+    if 'rsi' in df.columns:
+        styler = styler.map(color_rsi, subset=['rsi'])
+    if 'rvol' in df.columns:
+        styler = styler.map(color_rvol, subset=['rvol'])
+    if 'ret_5d' in df.columns:
+        styler = styler.map(color_ret, subset=['ret_5d'])
+        
+    # Define our desired formatting
+    format_dict = {
+        'Close': '{:.2f}',
+        'rsi': '{:.1f}',
+        'rvol': '{:.2f}',
+        'ret_5d': '{:.2%}',
+        'ret_10d': '{:.2%}',
+        'ma_20': '{:.2f}',
+        'ema_8': '{:.2f}'
+    }
+    
+    # Filter the format dictionary to only include columns currently in the DataFrame
+    safe_format_dict = {k: v for k, v in format_dict.items() if k in df.columns}
+    
+    return styler.format(safe_format_dict)
 
 # ==========================================
 # 6. STREAMLIT UI

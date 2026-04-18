@@ -499,6 +499,12 @@ if st.sidebar.button("🚀 Run Live Scan"):
             if live_data.empty:
                 st.error("Failed to fetch data or no stocks met liquidity requirements.")
             else:
+                # --- NEW DIAGNOSTIC CODE ---
+                missing_tickers = set(tickers) - set(live_data['Ticker'].unique())
+                if missing_tickers:
+                    st.warning(f"🕵️ Missing Ticker(s) detected: {', '.join(missing_tickers)}")
+                # ---------------------------
+
                 with st.spinner("Calculating AI Scores & Timeframes..."):
                     live_data['Company'] = live_data['Ticker'].map(ticker_map)
                     

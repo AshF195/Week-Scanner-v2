@@ -81,28 +81,33 @@ def get_tickers_and_names(markets):
     return list(set(tickers)), ticker_map
 
 # ==========================================
-# 3. DATA FETCHING & INDICATORS (STEALTH MODE)
+# 3. DATA FETCHING & INDICATORS (STEALTH + DISGUISE MODE)
 # ==========================================
+import requests
+
 @st.cache_data(ttl=3600)
 def fetch_latest_data(tickers):
     latest_rows = []
     
-    # 1. Break the massive ticker list into safe chunks of 50 
-    # to avoid triggering Yahoo's aggressive rate limiters.
+    # 1. Create a custom browser session to bypass IP blocks
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    })
+    
     chunk_size = 50
     chunks = [tickers[i:i + chunk_size] for i in range(0, len(tickers), chunk_size)]
     
-    # 2. We remove 'threads=4' because concurrent requests trigger Yahoo's IP ban
     for chunk in chunks:
-        # Download data for this chunk sequentially
-        data = yf.download(chunk, period="6mo", progress=False)
+        # 2. Pass the custom session into the download function
+        data = yf.download(chunk, period="6mo", progress=False, session=session)
         
         if data.empty:
-            continue # If this chunk fails/rate-limits, skip and try the next one
+            continue 
             
         for ticker in chunk:
             try:
-                # Bulletproof MultiIndex extraction (Handles both old and new YFinance updates)
+                # Bulletproof MultiIndex extraction
                 if isinstance(data.columns, pd.MultiIndex):
                     if ticker in data.columns.get_level_values(1):
                         df = data.xs(ticker, axis=1, level=1).copy()
@@ -154,7 +159,7 @@ def fetch_latest_data(tickers):
         return pd.DataFrame()
         
     final_df = pd.concat(latest_rows)
-    return final_df[(final_df['Close'] >= 1) & (final_df['volume_avg_20'] >= 50000)]
+    return final_df[(final_df['Close'] >= 1) & (final_df['volume_avg_20'] >= 250000)]
 
 # ==========================================
 # 4. SCORING MODELS

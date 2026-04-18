@@ -124,7 +124,7 @@ def get_tickers_and_names(markets):
 # ==========================================
 # 3. DATA FETCHING & INDICATORS (ROBUST MODE)
 # ==========================================
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_latest_data(tickers):
     latest_rows = []
     
@@ -294,8 +294,9 @@ def apply_rag_formatting(df):
         'ema_8': '{:.2f}', 'ema_21': '{:.2f}',
         'ma_20_slope': '{:.3f}', 'macd': '{:.3f}', 'macd_signal': '{:.3f}',
         'volume_trend': '{:.0f}',
-        'Average_Rank': '{:.2f}', 'Rank_ChatGPT': '{:.2f}',
-        'Rank_Grok': '{:.2f}', 'Rank_Gemini': '{:.2f}', 'Rank_Hybrid': '{:.2f}'
+        # Updated to whole numbers!
+        'Average_Rank': '{:.0f}', 'Rank_ChatGPT': '{:.0f}',
+        'Rank_Grok': '{:.0f}', 'Rank_Gemini': '{:.0f}', 'Rank_Hybrid': '{:.0f}'
     }
     
     safe_format_dict = {k: v for k, v in format_dict.items() if k in df.columns}

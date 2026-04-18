@@ -24,7 +24,6 @@ def load_finbert():
     """Loads the FinBERT model into memory once to prevent reloading."""
     if not FINBERT_AVAILABLE:
         return None
-    # ProsusAI/finbert is the industry standard for financial sentiment
     return pipeline("sentiment-analysis", model="ProsusAI/finbert")
 
 def analyze_sentiment(ticker, nlp_pipe):
@@ -38,7 +37,7 @@ def analyze_sentiment(ticker, nlp_pipe):
     try:
         stock = yf.Ticker(ticker)
         news = stock.news
-        time.sleep(0.5) # Gentle delay
+        time.sleep(0.5) 
         
         if news and isinstance(news, list):
             headlines = [
@@ -52,9 +51,7 @@ def analyze_sentiment(ticker, nlp_pipe):
     # --- SOURCE 2: Fallback to Google News RSS ---
     if not headlines:
         try:
-            # Query Google News for "{Ticker} stock news"
             url = f"https://news.google.com/rss/search?q={ticker}+stock+news&hl=en-US&gl=US&ceid=US:en"
-            # Disguise our request as a standard web browser so Google doesn't block it
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
             
             with urllib.request.urlopen(req, timeout=5) as response:
@@ -65,13 +62,12 @@ def analyze_sentiment(ticker, nlp_pipe):
             for item in root.findall('.//item')[:5]:
                 title_node = item.find('title')
                 if title_node is not None and title_node.text:
-                    # Clean up the " - Publisher Name" string that Google tacks onto the end of titles
                     clean_title = title_node.text.rsplit(' - ', 1)[0]
+                    clean_title = clean_title[:200] # Prevent FinBERT size mismatch crash
                     headlines.append(clean_title)
         except Exception as e:
             print(f"[{ticker}] Google News fallback failed: {e}")
 
-    # --- FINAL CHECK ---
     if not headlines:
         return "No Headlines ⚪"
         
@@ -119,13 +115,9 @@ def get_tickers_and_names(markets):
                 for _, row in df.iterrows():
                     t = str(row['Ticker']).strip().upper()
                     
-                    # If this is an international market that needs a specific suffix
                     if suffix:
-                        # 1. Chop off anything after a hyphen (fixes 'ADS-DE' -> 'ADS', 'AC-PA.PA' -> 'AC')
                         t = t.split('-')[0]
-                        # 2. Chop off anything after a dot (fixes 'AZN.L' -> 'AZN')
                         t = t.split('.')[0]
-                        # 3. Glue the clean base ticker to the correct Yahoo Finance suffix
                         t = f"{t}{suffix}"
                         
                     tickers.append(t)
@@ -141,16 +133,13 @@ def get_tickers_and_names(markets):
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_latest_data(tickers):
     latest_rows = []
-    
-    # 1. Bump chunk size to 20 for 2x speed improvement
     chunk_size = 10
     chunks = [tickers[i:i + chunk_size] for i in range(0, len(tickers), chunk_size)]
     
     for chunk in chunks:
         data = pd.DataFrame()
-        
-        # 2. Retry Logic (Try up to 3 times per chunk)
         max_retries = 3
+        
         for attempt in range(max_retries):
             data = yf.download(chunk, period="3mo", progress=False)
             if not data.empty:
@@ -160,7 +149,6 @@ def fetch_latest_data(tickers):
         if data.empty:
             continue 
             
-        # 3. Mimic human browsing
         time.sleep(1.0)
         
         for ticker in chunk:
@@ -196,10 +184,12 @@ def fetch_latest_data(tickers):
                 df['rsi'] = 100 - (100 / (1 + (gain / loss)))
                 
                 df['volume_avg_20'] = df['Volume'].rolling(window=20).mean()
-                df['rvol'] = df['Volume'] / df['volume_avg_20']
+                df['rvol'] = df['Volume'] / (df['volume_avg_20'] + 1e-9)
                 df['volume_trend'] = df['volume_avg_20'].diff(5)
+                
                 df['ret_5d'] = df['Close'].pct_change(5)
                 df['ret_10d'] = df['Close'].pct_change(10)
+                df['ret_21d'] = df['Close'].pct_change(21) # 1-Month Return
                 
                 df['high_50d'] = df['High'].rolling(window=50).max()
                 df['near_high'] = df['Close'] >= (df['high_50d'] * 0.95)
@@ -224,103 +214,158 @@ def fetch_latest_data(tickers):
 # ==========================================
 # 4. SCORING MODELS (SCALED / CONTINUOUS)
 # ==========================================
-import numpy as np
-import pandas as pd
-
 def score_chatgpt(df):
     s = pd.Series(0.0, index=df.index)
     dist_ma = (df['Close'] - df['ma_20']) / (df['ma_20'] + 1e-9)
-
-    # Trend (scaled)
     s += np.clip(dist_ma * 100, 0, 10)
     s += np.clip(df['ma_20_slope'] * 10, 0, 10)
-
-    # Penalise overextension
     s -= np.clip((dist_ma - 0.08) * 100, 0, 10)
-
-    # RSI sweet spot (peaks ~62)
     s += 10 - np.abs(df['rsi'] - 62) * 0.4
-
-    # Momentum
     s += np.clip(df['ret_5d'] * 100, 0, 10)
-
-    # MACD strength
     macd_diff = df['macd'] - df['macd_signal']
     s += np.clip(macd_diff * 50, 0, 5)
-
-    # Volume
     s += np.clip((df['rvol'] - 1) * 10, 0, 15)
     s += np.clip(df['volume_trend'] * 10, 0, 10)
     return s
 
 def score_grok(df):
     s = pd.Series(0.0, index=df.index)
-
-    # Momentum
     s += np.clip(df['ret_5d'] * 100, 0, 15)
     s += np.clip((df['ret_10d'] - df['ret_5d']) * 100, 0, 10)
-
-    # Volume
     s += np.clip((df['rvol'] - 1) * 10, 0, 15)
-
-    # Trend
     s += np.clip((df['Close'] - df['ma_20']) / (df['ma_20'] + 1e-9) * 50, 0, 10)
     s += np.clip((df['ma_20'] - df['ma_50']) / (df['ma_50'] + 1e-9) * 50, 0, 10)
-
-    # Breakout proximity (added 1e-9 to prevent divide by zero)
     dist_high = df['Close'] / (df['high_50d'] + 1e-9)
     s += np.clip((dist_high - 0.9) * 50, 0, 10)
     return s
 
 def score_gemini(df):
     s = pd.Series(0.0, index=df.index)
-
-    # EMA strength
     ema_gap = (df['ema_8'] - df['ema_21']) / (df['ema_21'] + 1e-9)
     s += np.clip(ema_gap * 100, 0, 15)
-
-    # MACD
     macd_diff = df['macd'] - df['macd_signal']
     s += np.clip(macd_diff * 50, 0, 15)
-
-    # RSI
     s += 10 - np.abs(df['rsi'] - 60) * 0.3
-
-    # RVOL (scaled)
     s += np.clip((df['rvol'] - 1) * 20, 0, 25)
-
-    # Close strength (added 1e-9 to prevent divide by zero on zero-range days)
     close_pos = (df['Close'] - df['Low']) / (df['High'] - df['Low'] + 1e-9)
     s += close_pos * 20
-
-    # Catalyst proxy
     s += np.where(df['post_earnings'], 10, 0)
     return s
 
 def score_hybrid(df):
     s = pd.Series(0.0, index=df.index)
     dist_ma = (df['Close'] - df['ma_20']) / (df['ma_20'] + 1e-9)
-
-    # Trend
     s += np.clip(dist_ma * 50, 0, 10)
     s += np.clip(df['ma_20_slope'] * 10, 0, 10)
-
-    # Momentum
     s += np.clip(df['ret_5d'] * 100, 0, 10)
     s += np.clip((df['ret_10d'] - df['ret_5d']) * 100, 0, 10)
-
-    # RSI
     s += 10 - np.abs(df['rsi'] - 60) * 0.3
-
-    # Volume
     s += np.clip((df['rvol'] - 1) * 15, 0, 15)
-
-    # Breakout proximity
     dist_high = df['Close'] / (df['high_50d'] + 1e-9)
     s += np.clip((dist_high - 0.9) * 50, 0, 10)
-
-    # Catalyst
     s += np.where(df['post_earnings'], 10, 0)
+    return s
+
+# --- 1-MONTH MODELS ---
+def score_chatgpt_1m(df):
+    s = pd.Series(0.0, index=df.index)
+    
+    # Trend Quality
+    dist_ma50 = (df['Close'] - df['ma_50']) / (df['ma_50'] + 1e-9)
+    ma_alignment = (df['ma_20'] - df['ma_50']) / (df['ma_50'] + 1e-9)
+    s += np.clip(dist_ma50 * 80, 0, 10)
+    s -= np.clip((dist_ma50 - 0.12) * 100, 0, 10)
+    s += np.clip(ma_alignment * 100, 0, 10)
+    
+    # Sustainable Momentum
+    s += np.clip(df['ret_21d'] * 80, 0, 10)
+    momentum_balance = df['ret_21d'] - df['ret_10d']
+    s += np.clip(momentum_balance * 100, 0, 8)
+    
+    # RSI Stability
+    s += 12 - np.abs(df['rsi'] - 55) * 0.35
+    
+    # Volume Consistency
+    vol_trend_norm = df['volume_trend'] / (df['volume_avg_20'] + 1e-9)
+    s += np.clip(vol_trend_norm * 50, 0, 8)
+    s += np.clip((df['rvol'] - 1) * 5, 0, 5)
+    
+    # Positioning
+    dist_high = df['Close'] / (df['high_50d'] + 1e-9)
+    s += np.clip((dist_high - 0.85) * 50, 0, 7)
+    s -= np.clip((dist_high - 0.98) * 100, 0, 5)
+    
+    return s
+
+def score_grok_1m(df):
+    s = pd.Series(0.0, index=df.index)
+    
+    # 1-Month Performance & Momentum
+    s += np.clip(df['ret_21d'] * 120, 0, 25)
+    momentum_acceleration = df['ret_21d'] - df['ret_10d']
+    s += np.clip(momentum_acceleration * 120, 0, 12)
+    
+    # Trend Alignment & Strength
+    dist_ma50 = (df['Close'] - df['ma_50']) / (df['ma_50'] + 1e-9)
+    s += np.clip(dist_ma50 * 80, 0, 15)
+    ma_alignment = (df['ma_20'] - df['ma_50']) / (df['ma_50'] + 1e-9)
+    s += np.clip(ma_alignment * 100, 0, 10)
+    
+    # Volume Confirmation
+    s += np.clip((df['rvol'] - 1) * 8, 0, 10)
+    vol_trend_norm = df['volume_trend'] / (df['volume_avg_20'] + 1e-9)
+    s += np.clip(vol_trend_norm * 60, -5, 8)
+    
+    # Positioning & RSI
+    dist_high = df['Close'] / (df['high_50d'] + 1e-9)
+    s += np.clip((dist_high - 0.82) * 60, 0, 12)
+    s -= np.clip((dist_high - 0.97) * 80, 0, 8)
+    s += 12 - np.abs(df['rsi'] - 58) * 0.35
+    
+    s = np.clip(s, -10, 55)
+    return s
+
+def score_gemini_1m(df):
+    s = pd.Series(0.0, index=df.index)
+    # Refined Gemini 1M: 21 EMA vs 50 MA gap
+    ema_gap = (df['ema_21'] - df['ma_50']) / (df['ma_50'] + 1e-9)
+    s += np.clip(ema_gap * 100, 0, 15)
+    
+    # Target 1-month continuous momentum
+    s += np.clip(df['ret_21d'] * 100, 0, 20)
+    
+    # Healthy RSI resetting, preventing overbought entries
+    s += 10 - np.abs(df['rsi'] - 55) * 0.3
+    
+    # Consistent volume trend building up (vs single day rvol spikes)
+    s += np.clip((df['volume_trend'] / (df['volume_avg_20'] + 1e-9)) * 50, 0, 15)
+    return s
+
+def score_hybrid_1m(df):
+    s = pd.Series(0.0, index=df.index)
+    
+    # Trend & Alignment (ChatGPT / Gemini Blend)
+    dist_ma50 = (df['Close'] - df['ma_50']) / (df['ma_50'] + 1e-9)
+    ma_alignment = (df['ma_20'] - df['ma_50']) / (df['ma_50'] + 1e-9)
+    s += np.clip(dist_ma50 * 60, 0, 10)
+    s += np.clip(ma_alignment * 80, 0, 10)
+    
+    # Sustainable Momentum (Grok Influence)
+    s += np.clip(df['ret_21d'] * 100, 0, 15)
+    momentum_balance = df['ret_21d'] - df['ret_10d']
+    s += np.clip(momentum_balance * 80, 0, 10)
+    
+    # Volume Flow (Gemini Influence)
+    vol_trend_norm = df['volume_trend'] / (df['volume_avg_20'] + 1e-9)
+    s += np.clip(vol_trend_norm * 50, 0, 10)
+    s += np.clip((df['rvol'] - 1) * 8, 0, 10)
+    
+    # Positioning & Health (Universal Consensus)
+    dist_high = df['Close'] / (df['high_50d'] + 1e-9)
+    s += np.clip((dist_high - 0.85) * 50, 0, 10)
+    s -= np.clip((dist_high - 0.98) * 100, 0, 5) 
+    s += 12 - np.abs(df['rsi'] - 56) * 0.3
+    
     return s
 
 # ==========================================
@@ -328,24 +373,23 @@ def score_hybrid(df):
 # ==========================================
 def color_rsi(val):
     if pd.isna(val): return ''
-    if 50 <= val <= 70: return 'color: #00FF00' # Green (Bullish zone)
-    elif val > 70 or 40 <= val < 50: return 'color: #FFA500' # Amber (Overbought/Neutral)
-    return 'color: #FF0000' # Red (Bearish)
+    if 50 <= val <= 70: return 'color: #00FF00' 
+    elif val > 70 or 40 <= val < 50: return 'color: #FFA500' 
+    return 'color: #FF0000' 
 
 def color_rvol(val):
     if pd.isna(val): return ''
-    if val >= 1.5: return 'color: #00FF00' # Green (High vol)
-    elif 1.0 <= val < 1.5: return 'color: #FFA500' # Amber (Avg vol)
-    return 'color: #FF0000' # Red (Low vol)
+    if val >= 1.5: return 'color: #00FF00' 
+    elif 1.0 <= val < 1.5: return 'color: #FFA500' 
+    return 'color: #FF0000' 
 
 def color_ret(val):
     if pd.isna(val): return ''
-    if val >= 0.02: return 'color: #00FF00' # Green (> 2%)
-    elif val <= -0.02: return 'color: #FF0000' # Red (< -2%)
-    return 'color: #FFA500' # Amber (Chop)
+    if val >= 0.02: return 'color: #00FF00' 
+    elif val <= -0.02: return 'color: #FF0000' 
+    return 'color: #FFA500' 
 
 def apply_rag_formatting(df):
-    """Applies RAG colors and formats floats for display safely."""
     df = df.reset_index(drop=True)
     styler = df.style
     
@@ -355,21 +399,23 @@ def apply_rag_formatting(df):
         styler = styler.map(color_rvol, subset=['rvol'])
     if 'ret_5d' in df.columns:
         styler = styler.map(color_ret, subset=['ret_5d'])
+    if 'ret_21d' in df.columns:
+        styler = styler.map(color_ret, subset=['ret_21d'])
         
     format_dict = {
         'Close': '{:.2f}', 'rsi': '{:.1f}', 'rvol': '{:.2f}',
-        'ret_5d': '{:.2%}', 'ret_10d': '{:.2%}', 
+        'ret_5d': '{:.2%}', 'ret_10d': '{:.2%}', 'ret_21d': '{:.2%}', 
         'ma_20': '{:.2f}', 'ma_50': '{:.2f}', 
         'ema_8': '{:.2f}', 'ema_21': '{:.2f}',
         'ma_20_slope': '{:.3f}', 'macd': '{:.3f}', 'macd_signal': '{:.3f}',
         'volume_trend': '{:.0f}',
-        # Updated to whole numbers!
         'Average_Rank': '{:.0f}', 'Rank_ChatGPT': '{:.0f}',
-        'Rank_Grok': '{:.0f}', 'Rank_Gemini': '{:.0f}', 'Rank_Hybrid': '{:.0f}'
+        'Rank_Grok': '{:.0f}', 'Rank_Gemini': '{:.0f}', 'Rank_Hybrid': '{:.0f}',
+        'Average_Rank_1M': '{:.0f}', 'Rank_ChatGPT_1M': '{:.0f}',
+        'Rank_Grok_1M': '{:.0f}', 'Rank_Gemini_1M': '{:.0f}', 'Rank_Hybrid_1M': '{:.0f}'
     }
     
     safe_format_dict = {k: v for k, v in format_dict.items() if k in df.columns}
-    
     return styler.format(safe_format_dict)
 
 # ==========================================
@@ -377,10 +423,9 @@ def apply_rag_formatting(df):
 # ==========================================
 st.set_page_config(page_title="V2 Market Scanner", layout="wide")
 
-st.title("⚡ V2 Live Market Scanner")
+st.title("⚡ V2 Live Market Scanner (Dual Timeframe)")
 st.markdown("Scan major global markets and generate consensus momentum picks using 4 AI models.")
 
-# --- EXPLANATION UI ---
 with st.expander("📚 How Scoring & FinBERT Sentiment Works (Click to Expand)", expanded=False):
     st.markdown("""
     ### FinBERT News Sentiment
@@ -389,19 +434,14 @@ with st.expander("📚 How Scoring & FinBERT Sentiment Works (Click to Expand)",
     * 🟡 **Neutral:** Routine market reporting, sector-wide news, or mixed results.
     * 🔴 **Bearish:** Missed earnings, downgrades, lawsuits, or lowered guidance.
 
-    ### The 4 Models
-    * 🤖 **ChatGPT (Trend Focus):** Looks for steady momentum. Rewards stocks trading cleanly above their 20-day moving average with an RSI in the "sweet spot" (55-70). Punishes overextended stocks.
-    * 🌌 **Grok (Breakout Focus):** Aggressive momentum. Cares purely about accelerating price action (10-day returns > 5-day returns) and stocks breaking into new 50-day highs on volume.
-    * ✨ **Gemini (Volume/Catalyst Focus):** Looks for explosive action under the hood. Heavily rewards massive relative volume (RVOL > 1.5), EMA crossovers, and post-earnings drift setups.
-    * 🧬 **Hybrid (Best-of-All):** A balanced blend combining ChatGPT's safety, Grok's breakout triggers, and Gemini's volume requirements.
-    
-    ### RAG Metric Formatting (Red / Amber / Green)
-    * **RSI:** 🟢 50-70 (Trend) | 🟡 40-50 or >70 (Chop/Overbought) | 🔴 < 40 (Bearish)
-    * **RVOL:** 🟢 > 1.5 (High Interest) | 🟡 1.0 - 1.5 (Normal) | 🔴 < 1.0 (Low Interest)
-    * **5-Day Return:** 🟢 > +2% | 🟡 -2% to +2% | 🔴 < -2%
+    ### The 4 Models (Dual Timeframe)
+    Each AI now computes two distinct score sets: **Short-Term (1-2 weeks)** and **Medium-Term (1-Month Swing)**.
+    * 🤖 **ChatGPT (Trend Focus):** Rewards moving average strength and RSI. The 1M model tracks the 50-day MA.
+    * 🌌 **Grok (Breakout Focus):** Cares purely about accelerating price action and high proximity breakouts.
+    * ✨ **Gemini (Volume/Catalyst Focus):** Looks for explosive RVOL and EMA crossovers. The 1M model targets rising volume trends.
+    * 🧬 **Hybrid (Best-of-All):** A balanced blend combining all distinct logic triggers.
     """)
 
-# Sidebar Settings
 st.sidebar.header("Scanner Settings")
 if not FINBERT_AVAILABLE:
     st.sidebar.error("⚠️ FinBERT libraries not found. Run `pip install transformers torch` in your terminal to enable news sentiment.")
@@ -428,9 +468,10 @@ if st.sidebar.button("🚀 Run Live Scan"):
             if live_data.empty:
                 st.error("Failed to fetch data or no stocks met liquidity requirements.")
             else:
-                with st.spinner("Calculating AI Scores..."):
+                with st.spinner("Calculating AI Scores & Timeframes..."):
                     live_data['Company'] = live_data['Ticker'].map(ticker_map)
                     
+                    # Short Term Scoring
                     live_data['ChatGPT_Score'] = score_chatgpt(live_data)
                     live_data['Grok_Score'] = score_grok(live_data)
                     live_data['Gemini_Score'] = score_gemini(live_data)
@@ -442,10 +483,22 @@ if st.sidebar.button("🚀 Run Live Scan"):
                     live_data['Rank_Hybrid'] = live_data['Hybrid_Score'].rank(ascending=False, method='min')
                     live_data['Average_Rank'] = live_data[['Rank_ChatGPT', 'Rank_Grok', 'Rank_Gemini', 'Rank_Hybrid']].mean(axis=1)
                     
-                # Master list processing + FinBERT
+                    # 1-Month Scoring
+                    live_data['ChatGPT_Score_1M'] = score_chatgpt_1m(live_data)
+                    live_data['Grok_Score_1M'] = score_grok_1m(live_data)
+                    live_data['Gemini_Score_1M'] = score_gemini_1m(live_data)
+                    live_data['Hybrid_Score_1M'] = score_hybrid_1m(live_data)
+
+                    live_data['Rank_ChatGPT_1M'] = live_data['ChatGPT_Score_1M'].rank(ascending=False, method='min')
+                    live_data['Rank_Grok_1M'] = live_data['Grok_Score_1M'].rank(ascending=False, method='min')
+                    live_data['Rank_Gemini_1M'] = live_data['Gemini_Score_1M'].rank(ascending=False, method='min')
+                    live_data['Rank_Hybrid_1M'] = live_data['Hybrid_Score_1M'].rank(ascending=False, method='min')
+                    live_data['Average_Rank_1M'] = live_data[['Rank_ChatGPT_1M', 'Rank_Grok_1M', 'Rank_Gemini_1M', 'Rank_Hybrid_1M']].mean(axis=1)
+
                 master = live_data.sort_values('Average_Rank', ascending=True).head(20).copy()
+                master_1m = live_data.sort_values('Average_Rank_1M', ascending=True).head(20).copy()
                 
-                # We need a progress bar for FinBERT because 20 network requests can take a few seconds
+                # NLP Sentiment (Applied to Short-Term Master only to preserve API performance)
                 nlp = load_finbert()
                 sentiments = []
                 sentiment_bar = st.progress(0, text="Analyzing Master Consensus News Sentiment...")
@@ -453,7 +506,6 @@ if st.sidebar.button("🚀 Run Live Scan"):
                 for idx, row in master.iterrows():
                     sent = analyze_sentiment(row['Ticker'], nlp)
                     sentiments.append(sent)
-                    # Update progress bar
                     current_step = len(sentiments)
                     sentiment_bar.progress(current_step / 20, text=f"Analyzing News for {row['Ticker']} ({current_step}/20)...")
                     
@@ -468,42 +520,64 @@ if st.sidebar.button("🚀 Run Live Scan"):
                 ])
                 
                 with tab1:
-                    st.subheader("👑 Top 20: Master Consensus + News Sentiment")
-                    st.markdown("Sorted by the lowest average rank. **Sentiment is calculated from the last 5 news headlines.**")
-                    
-                    # Added 'Rank_Hybrid' right after 'Rank_Gemini'
+                    st.subheader("⚡ Short-Term (1-2 Weeks) Top 20")
                     master_cols = ['Ticker', 'Company', 'FinBERT_Sentiment', 'Average_Rank', 'Rank_ChatGPT', 'Rank_Grok', 'Rank_Gemini', 'Rank_Hybrid', 'Close', 'rsi', 'rvol', 'ret_5d']
-                    
                     st.dataframe(apply_rag_formatting(master[master_cols]), use_container_width=True, hide_index=True)
                     
+                    st.divider() 
+                    
+                    st.subheader("📅 Medium-Term (1 Month) Top 20")
+                    master_cols_1m = ['Ticker', 'Company', 'Average_Rank_1M', 'Rank_ChatGPT_1M', 'Rank_Grok_1M', 'Rank_Gemini_1M', 'Rank_Hybrid_1M', 'Close', 'rsi', 'rvol', 'ret_21d']
+                    st.dataframe(apply_rag_formatting(master_1m[master_cols_1m]), use_container_width=True, hide_index=True)
+                    
                 with tab2:
-                    st.subheader("🤖 ChatGPT Model (Trend Focus)")
-                    st.markdown("Rewards moving average strength and healthy RSI. Punishes over-extension.")
+                    st.subheader("⚡ Short-Term Trend Focus")
                     chatgpt_top = live_data.sort_values(by=['ChatGPT_Score', 'Average_Rank'], ascending=[False, True]).head(20)
-                    # Exposing everything ChatGPT evaluates
                     cg_cols = ['Ticker', 'Company', 'Rank_ChatGPT', 'ChatGPT_Score', 'Close', 'ma_20', 'ma_20_slope', 'rsi', 'macd', 'macd_signal', 'rvol', 'volume_trend', 'ret_5d']
                     st.dataframe(apply_rag_formatting(chatgpt_top[cg_cols]), use_container_width=True, hide_index=True)
                     
+                    st.divider()
+                    
+                    st.subheader("📅 1-Month Trend Focus")
+                    chatgpt_top_1m = live_data.sort_values(by=['ChatGPT_Score_1M', 'Average_Rank_1M'], ascending=[False, True]).head(20)
+                    cg_cols_1m = ['Ticker', 'Company', 'Rank_ChatGPT_1M', 'ChatGPT_Score_1M', 'Close', 'ma_50', 'rsi', 'rvol', 'ret_21d']
+                    st.dataframe(apply_rag_formatting(chatgpt_top_1m[cg_cols_1m]), use_container_width=True, hide_index=True)
+                    
                 with tab3:
-                    st.subheader("🌌 Grok Model (Breakout Focus)")
-                    st.markdown("Rewards strong short-term breakouts and proximity to the 50-day high.")
+                    st.subheader("⚡ Short-Term Breakout Focus")
                     grok_top = live_data.sort_values(by=['Grok_Score', 'Average_Rank'], ascending=[False, True]).head(20)
-                    # Exposing everything Grok evaluates
                     grok_cols = ['Ticker', 'Company', 'Rank_Grok', 'Grok_Score', 'Close', 'ma_20', 'ma_50', 'near_high', 'rvol', 'ret_5d', 'ret_10d']
                     st.dataframe(apply_rag_formatting(grok_top[grok_cols]), use_container_width=True, hide_index=True)
                     
+                    st.divider()
+                    
+                    st.subheader("📅 1-Month Breakout Focus")
+                    grok_top_1m = live_data.sort_values(by=['Grok_Score_1M', 'Average_Rank_1M'], ascending=[False, True]).head(20)
+                    grok_cols_1m = ['Ticker', 'Company', 'Rank_Grok_1M', 'Grok_Score_1M', 'Close', 'ma_50', 'near_high', 'ret_21d']
+                    st.dataframe(apply_rag_formatting(grok_top_1m[grok_cols_1m]), use_container_width=True, hide_index=True)
+                    
                 with tab4:
-                    st.subheader("✨ Gemini Model (Volume & Catalyst Focus)")
-                    st.markdown("Rewards aggressive relative volume, EMA crossovers, and post-earnings setups.")
+                    st.subheader("⚡ Short-Term Catalyst Focus")
                     gemini_top = live_data.sort_values(by=['Gemini_Score', 'Average_Rank'], ascending=[False, True]).head(20)
-                    # Exposing everything Gemini evaluates
                     gem_cols = ['Ticker', 'Company', 'Rank_Gemini', 'Gemini_Score', 'Close', 'ema_8', 'ema_21', 'macd', 'macd_signal', 'rsi', 'rvol', 'close_near_high', 'post_earnings']
                     st.dataframe(apply_rag_formatting(gemini_top[gem_cols]), use_container_width=True, hide_index=True)
+
+                    st.divider()
+                    
+                    st.subheader("📅 1-Month Squeeze Focus")
+                    gemini_top_1m = live_data.sort_values(by=['Gemini_Score_1M', 'Average_Rank_1M'], ascending=[False, True]).head(20)
+                    gem_cols_1m = ['Ticker', 'Company', 'Rank_Gemini_1M', 'Gemini_Score_1M', 'Close', 'ema_21', 'ma_50', 'rsi', 'volume_trend', 'ret_21d']
+                    st.dataframe(apply_rag_formatting(gemini_top_1m[gem_cols_1m]), use_container_width=True, hide_index=True)
                     
                 with tab5:
-                    st.subheader("🧬 Hybrid V2 Model")
-                    st.markdown("The best-of-all balanced blend.")
+                    st.subheader("⚡ Short-Term Best-of-All")
                     hybrid_top = live_data.sort_values(by=['Hybrid_Score', 'Average_Rank'], ascending=[False, True]).head(20)
-                    # Exposing everything the Hybrid evaluates
                     hyb_cols = ['Ticker', 'Company', 'Rank_Hybrid', 'Hybrid_Score', 'Close', 'ma_20', 'ma_20_slope', 'macd', 'macd_signal', 'rsi', 'rvol', 'near_high', 'post_earnings', 'ret_5d', 'ret_10d']
                     st.dataframe(apply_rag_formatting(hybrid_top[hyb_cols]), use_container_width=True, hide_index=True)
+
+                    st.divider()
+                    
+                    st.subheader("📅 1-Month Best-of-All")
+                    hybrid_top_1m = live_data.sort_values(by=['Hybrid_Score_1M', 'Average_Rank_1M'], ascending=[False, True]).head(20)
+                    hyb_cols_1m = ['Ticker', 'Company', 'Rank_Hybrid_1M', 'Hybrid_Score_1M', 'Close', 'ma_50', 'rsi', 'rvol', 'ret_21d']
+                    st.dataframe(apply_rag_formatting(hybrid_top_1m[hyb_cols_1m]), use_container_width=True, hide_index=True)

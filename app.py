@@ -209,7 +209,7 @@ def fetch_latest_data(tickers):
         return pd.DataFrame()
         
     final_df = pd.concat(latest_rows)
-    return final_df[(final_df['Close'] >= 1) & (final_df['volume_avg_20'] >= 50000)]
+    return final_df[(final_df['Close'] >= 1) & (final_df['volume_avg_20'] >= 20000)]
 
 # ==========================================
 # 4. SCORING MODELS (SCALED / CONTINUOUS)
@@ -266,105 +266,126 @@ def score_hybrid(df):
     s += np.where(df['post_earnings'], 10, 0)
     return s
 
-# --- 1-MONTH MODELS ---
+# --- 1-MONTH MODELS (FULLY SCALED) ---
+
 def score_chatgpt_1m(df):
     s = pd.Series(0.0, index=df.index)
     
     # Trend Quality
     dist_ma50 = (df['Close'] - df['ma_50']) / (df['ma_50'] + 1e-9)
     ma_alignment = (df['ma_20'] - df['ma_50']) / (df['ma_50'] + 1e-9)
-    s += np.clip(dist_ma50 * 80, 0, 10)
-    s -= np.clip((dist_ma50 - 0.12) * 100, 0, 10)
-    s += np.clip(ma_alignment * 100, 0, 10)
+
+    s += np.clip(dist_ma50 * 100, 0, 12)
+    s -= np.clip((dist_ma50 - 0.12) * 120, 0, 12)
+    s += np.clip(ma_alignment * 120, 0, 12)
     
     # Sustainable Momentum
-    s += np.clip(df['ret_21d'] * 80, 0, 10)
+    s += np.clip(df['ret_21d'] * 100, 0, 12)
     momentum_balance = df['ret_21d'] - df['ret_10d']
-    s += np.clip(momentum_balance * 100, 0, 8)
+    s += np.clip(momentum_balance * 120, 0, 10)
     
-    # RSI Stability
-    s += 12 - np.abs(df['rsi'] - 55) * 0.35
+    # RSI Stability (smooth curve)
+    s += 12 - np.abs(df['rsi'] - 55) * 0.4
     
     # Volume Consistency
     vol_trend_norm = df['volume_trend'] / (df['volume_avg_20'] + 1e-9)
-    s += np.clip(vol_trend_norm * 50, 0, 8)
-    s += np.clip((df['rvol'] - 1) * 5, 0, 5)
+    s += np.clip(vol_trend_norm * 60, 0, 10)
+    s += np.clip((df['rvol'] - 1) * 8, 0, 8)
     
     # Positioning
     dist_high = df['Close'] / (df['high_50d'] + 1e-9)
-    s += np.clip((dist_high - 0.85) * 50, 0, 7)
-    s -= np.clip((dist_high - 0.98) * 100, 0, 5)
+    s += np.clip((dist_high - 0.85) * 60, 0, 10)
+    s -= np.clip((dist_high - 0.98) * 120, 0, 8)
     
     return s
+
 
 def score_grok_1m(df):
     s = pd.Series(0.0, index=df.index)
     
-    # 1-Month Performance & Momentum
-    s += np.clip(df['ret_21d'] * 120, 0, 25)
-    momentum_acceleration = df['ret_21d'] - df['ret_10d']
-    s += np.clip(momentum_acceleration * 120, 0, 12)
+    # Strong Momentum (primary driver)
+    s += np.clip(df['ret_21d'] * 140, 0, 30)
     
-    # Trend Alignment & Strength
+    # Acceleration
+    momentum_acceleration = df['ret_21d'] - df['ret_10d']
+    s += np.clip(momentum_acceleration * 140, 0, 15)
+    
+    # Trend Strength
     dist_ma50 = (df['Close'] - df['ma_50']) / (df['ma_50'] + 1e-9)
-    s += np.clip(dist_ma50 * 80, 0, 15)
     ma_alignment = (df['ma_20'] - df['ma_50']) / (df['ma_50'] + 1e-9)
-    s += np.clip(ma_alignment * 100, 0, 10)
+    s += np.clip(dist_ma50 * 100, 0, 12)
+    s += np.clip(ma_alignment * 120, 0, 12)
     
     # Volume Confirmation
-    s += np.clip((df['rvol'] - 1) * 8, 0, 10)
+    s += np.clip((df['rvol'] - 1) * 10, 0, 12)
     vol_trend_norm = df['volume_trend'] / (df['volume_avg_20'] + 1e-9)
-    s += np.clip(vol_trend_norm * 60, -5, 8)
+    s += np.clip(vol_trend_norm * 80, -5, 10)
     
-    # Positioning & RSI
+    # Positioning (more aggressive)
     dist_high = df['Close'] / (df['high_50d'] + 1e-9)
-    s += np.clip((dist_high - 0.82) * 60, 0, 12)
-    s -= np.clip((dist_high - 0.97) * 80, 0, 8)
+    s += np.clip((dist_high - 0.80) * 80, 0, 15)
+    s -= np.clip((dist_high - 0.97) * 100, 0, 10)
+    
+    # RSI (slightly higher tolerance)
     s += 12 - np.abs(df['rsi'] - 58) * 0.35
     
-    s = np.clip(s, -10, 55)
     return s
+
 
 def score_gemini_1m(df):
     s = pd.Series(0.0, index=df.index)
-    # Refined Gemini 1M: 21 EMA vs 50 MA gap
+
+    # Trend Structure (EMA vs MA)
     ema_gap = (df['ema_21'] - df['ma_50']) / (df['ma_50'] + 1e-9)
-    s += np.clip(ema_gap * 100, 0, 15)
+    s += np.clip(ema_gap * 140, 0, 18)
     
-    # Target 1-month continuous momentum
-    s += np.clip(df['ret_21d'] * 100, 0, 20)
+    # Sustained Momentum
+    s += np.clip(df['ret_21d'] * 110, 0, 18)
     
-    # Healthy RSI resetting, preventing overbought entries
-    s += 10 - np.abs(df['rsi'] - 55) * 0.3
+    # RSI Stability
+    s += 12 - np.abs(df['rsi'] - 55) * 0.35
     
-    # Consistent volume trend building up (vs single day rvol spikes)
-    s += np.clip((df['volume_trend'] / (df['volume_avg_20'] + 1e-9)) * 50, 0, 15)
+    # Volume Consistency (core feature)
+    vol_trend_norm = df['volume_trend'] / (df['volume_avg_20'] + 1e-9)
+    s += np.clip(vol_trend_norm * 70, 0, 15)
+    
+    # Light RVOL confirmation
+    s += np.clip((df['rvol'] - 1) * 6, 0, 8)
+    
+    # Positioning (prefers controlled trends)
+    dist_high = df['Close'] / (df['high_50d'] + 1e-9)
+    s += np.clip((dist_high - 0.85) * 50, 0, 8)
+    
     return s
+
 
 def score_hybrid_1m(df):
     s = pd.Series(0.0, index=df.index)
     
-    # Trend & Alignment (ChatGPT / Gemini Blend)
+    # Trend (balanced)
     dist_ma50 = (df['Close'] - df['ma_50']) / (df['ma_50'] + 1e-9)
     ma_alignment = (df['ma_20'] - df['ma_50']) / (df['ma_50'] + 1e-9)
-    s += np.clip(dist_ma50 * 60, 0, 10)
-    s += np.clip(ma_alignment * 80, 0, 10)
+
+    s += np.clip(dist_ma50 * 80, 0, 10)
+    s += np.clip(ma_alignment * 100, 0, 10)
     
-    # Sustainable Momentum (Grok Influence)
-    s += np.clip(df['ret_21d'] * 100, 0, 15)
+    # Momentum + Acceleration
+    s += np.clip(df['ret_21d'] * 110, 0, 15)
     momentum_balance = df['ret_21d'] - df['ret_10d']
-    s += np.clip(momentum_balance * 80, 0, 10)
+    s += np.clip(momentum_balance * 100, 0, 12)
     
-    # Volume Flow (Gemini Influence)
+    # Volume Flow
     vol_trend_norm = df['volume_trend'] / (df['volume_avg_20'] + 1e-9)
-    s += np.clip(vol_trend_norm * 50, 0, 10)
+    s += np.clip(vol_trend_norm * 60, 0, 12)
     s += np.clip((df['rvol'] - 1) * 8, 0, 10)
     
-    # Positioning & Health (Universal Consensus)
+    # Positioning
     dist_high = df['Close'] / (df['high_50d'] + 1e-9)
-    s += np.clip((dist_high - 0.85) * 50, 0, 10)
-    s -= np.clip((dist_high - 0.98) * 100, 0, 5) 
-    s += 12 - np.abs(df['rsi'] - 56) * 0.3
+    s += np.clip((dist_high - 0.85) * 60, 0, 10)
+    s -= np.clip((dist_high - 0.98) * 100, 0, 6)
+    
+    # RSI Balance
+    s += 12 - np.abs(df['rsi'] - 56) * 0.35
     
     return s
 

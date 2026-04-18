@@ -32,20 +32,33 @@ def analyze_sentiment(ticker, nlp_pipe):
         
     try:
         stock = yf.Ticker(ticker)
-        # yf.Ticker.news can trigger rate limits if called too fast.
-        news = stock.news
         
-        # Micro-delay to prevent Yahoo from IP blocking rapid-fire news requests
-        time.sleep(0.5) 
+        # 1. Specifically catch yfinance fetch errors
+        try:
+            news = stock.news
+        except Exception as e:
+            print(f"[{ticker}] yfinance news fetch failed: {e}")
+            return "API Blocked ⚪"
+            
+        # 2. Bump delay to 1 full second to respect Yahoo's strict limits on the news endpoint
+        time.sleep(1.0) 
         
-        if not news:
+        if not news or not isinstance(news, list):
             return "No News ⚪"
             
-        # Grab the top 5 most recent headlines
-        headlines = [article['title'] for article in news[:5]]
+        # 3. Safely extract titles (Yahoo sometimes sneaks in ad payloads without 'title' keys)
+        headlines = [
+            article.get('title') 
+            for article in news[:5] 
+            if isinstance(article, dict) and article.get('title')
+        ]
+        
+        if not headlines:
+            return "No Headlines ⚪"
+            
+        # 4. Run through FinBERT
         results = nlp_pipe(headlines)
         
-        # FinBERT outputs labels: 'positive', 'negative', 'neutral'
         score = 0
         for res in results:
             if res['label'] == 'positive':
@@ -59,8 +72,10 @@ def analyze_sentiment(ticker, nlp_pipe):
             return "Bearish 🔴"
         else:
             return "Neutral 🟡"
-    except Exception:
-        # Fallback in case Yahoo throws a 403 Forbidden or timeout
+            
+    except Exception as e:
+        # Print exact error to your terminal/console so we aren't guessing!
+        print(f"[{ticker}] FinBERT Pipeline Error: {e}")
         return "Error ⚪"
 
 # ==========================================
@@ -243,14 +258,9 @@ def color_ret(val):
 
 def apply_rag_formatting(df):
     """Applies RAG colors and formats floats for display safely."""
-    
-    # FIX: Pandas Styler crashes if the DataFrame has duplicate indices 
-    # (like identical dates carried over from yfinance). We must reset it first.
     df = df.reset_index(drop=True)
-    
     styler = df.style
     
-    # Safely apply color mapping only if the column exists in this specific view
     if 'rsi' in df.columns:
         styler = styler.map(color_rsi, subset=['rsi'])
     if 'rvol' in df.columns:
@@ -258,7 +268,7 @@ def apply_rag_formatting(df):
     if 'ret_5d' in df.columns:
         styler = styler.map(color_ret, subset=['ret_5d'])
         
-    # Define our desired formatting
+    # Added Rank columns here to enforce 2 decimal places
     format_dict = {
         'Close': '{:.2f}',
         'rsi': '{:.1f}',
@@ -266,10 +276,14 @@ def apply_rag_formatting(df):
         'ret_5d': '{:.2%}',
         'ret_10d': '{:.2%}',
         'ma_20': '{:.2f}',
-        'ema_8': '{:.2f}'
+        'ema_8': '{:.2f}',
+        'Average_Rank': '{:.2f}',
+        'Rank_ChatGPT': '{:.2f}',
+        'Rank_Grok': '{:.2f}',
+        'Rank_Gemini': '{:.2f}',
+        'Rank_Hybrid': '{:.2f}'
     }
     
-    # Filter the format dictionary to only include columns currently in the DataFrame
     safe_format_dict = {k: v for k, v in format_dict.items() if k in df.columns}
     
     return styler.format(safe_format_dict)

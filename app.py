@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import warnings
+import time
 
 # Try to import FinBERT libraries, catch gracefully if not installed
 try:
@@ -25,13 +26,18 @@ def load_finbert():
     return pipeline("sentiment-analysis", model="ProsusAI/finbert")
 
 def analyze_sentiment(ticker, nlp_pipe):
-    """Fetches recent headlines and returns an aggregated FinBERT sentiment."""
+    """Fetches recent headlines safely and returns an aggregated FinBERT sentiment."""
     if not nlp_pipe:
         return "No FinBERT ⚠️"
         
     try:
         stock = yf.Ticker(ticker)
+        # yf.Ticker.news can trigger rate limits if called too fast.
         news = stock.news
+        
+        # Micro-delay to prevent Yahoo from IP blocking rapid-fire news requests
+        time.sleep(0.5) 
+        
         if not news:
             return "No News ⚪"
             
@@ -54,6 +60,7 @@ def analyze_sentiment(ticker, nlp_pipe):
         else:
             return "Neutral 🟡"
     except Exception:
+        # Fallback in case Yahoo throws a 403 Forbidden or timeout
         return "Error ⚪"
 
 # ==========================================
@@ -83,39 +90,36 @@ def get_tickers_and_names(markets):
 # ==========================================
 # 3. DATA FETCHING & INDICATORS (ROBUST MODE)
 # ==========================================
-import time
-
 @st.cache_data(ttl=3600)
 def fetch_latest_data(tickers):
     latest_rows = []
     
-    # 1. Reduce chunk size to 10
-    chunk_size = 10
+    # 1. Bump chunk size to 20 for 2x speed improvement
+    chunk_size = 20
     chunks = [tickers[i:i + chunk_size] for i in range(0, len(tickers), chunk_size)]
     
-    for chunk in chunks:
+    # UI Progress Bar
+    progress_bar = st.progress(0, text="Initializing batch downloads...")
+    
+    for idx, chunk in enumerate(chunks):
         data = pd.DataFrame()
         
-        # 2. Add Retry Logic (Try up to 3 times per chunk)
+        # 2. Retry Logic (Try up to 3 times per chunk)
         max_retries = 3
         for attempt in range(max_retries):
-            # 3. Remove custom session, reduce period to '3mo' to lighten payload
             data = yf.download(chunk, period="3mo", progress=False)
-            
             if not data.empty:
-                break # Success! Break out of the retry loop
-                
-            time.sleep(2) # Wait 2 seconds before retrying if it failed
+                break 
+            time.sleep(2) 
             
         if data.empty:
-            continue # If it still failed after 3 tries, skip this chunk
+            continue 
             
-        # 4. Add a 1.5-second delay between chunks to mimic human browsing
-        time.sleep(1.5)
+        # 3. Mimic human browsing
+        time.sleep(1.0)
         
         for ticker in chunk:
             try:
-                # MultiIndex extraction
                 if isinstance(data.columns, pd.MultiIndex):
                     if ticker in data.columns.get_level_values(1):
                         df = data.xs(ticker, axis=1, level=1).copy()
@@ -124,12 +128,9 @@ def fetch_latest_data(tickers):
                 else:
                     df = data.copy() if len(chunk) == 1 else data[ticker].copy()
                     
-                # 5. Prevent over-filtering NaNs
-                # Forward-fill missing random data, only drop if actual price/volume is missing
                 df.ffill(inplace=True)
                 df.dropna(subset=['Close', 'Volume', 'High', 'Low'], inplace=True)
                 
-                # We need at least 50 days of data for the 50-day moving averages
                 if df.empty or len(df) < 50: 
                     continue
                     
@@ -168,6 +169,12 @@ def fetch_latest_data(tickers):
             except Exception: 
                 continue
                 
+        # Update progress bar
+        progress = min((idx + 1) / len(chunks), 1.0)
+        progress_bar.progress(progress, text=f"Fetched data for {min((idx+1)*chunk_size, len(tickers))} of {len(tickers)} stocks...")
+                
+    progress_bar.empty()
+    
     if not latest_rows: 
         st.error("⚠️ Yahoo Finance returned no data! You are still temporarily rate-limited. Wait 15-30 minutes and try again.")
         return pd.DataFrame()
@@ -228,21 +235,21 @@ def score_hybrid(df):
 # ==========================================
 def color_rsi(val):
     if pd.isna(val): return ''
-    if 50 <= val <= 70: return 'color: #00FF00' # Green (Bullish zone)
-    elif val > 70 or 40 <= val < 50: return 'color: #FFA500' # Amber (Overbought/Neutral)
-    return 'color: #FF0000' # Red (Bearish)
+    if 50 <= val <= 70: return 'color: #00FF00' 
+    elif val > 70 or 40 <= val < 50: return 'color: #FFA500' 
+    return 'color: #FF0000' 
 
 def color_rvol(val):
     if pd.isna(val): return ''
-    if val >= 1.5: return 'color: #00FF00' # Green (High vol)
-    elif 1.0 <= val < 1.5: return 'color: #FFA500' # Amber (Avg vol)
-    return 'color: #FF0000' # Red (Low vol)
+    if val >= 1.5: return 'color: #00FF00' 
+    elif 1.0 <= val < 1.5: return 'color: #FFA500' 
+    return 'color: #FF0000' 
 
 def color_ret(val):
     if pd.isna(val): return ''
-    if val >= 0.02: return 'color: #00FF00' # Green (> 2%)
-    elif val <= -0.02: return 'color: #FF0000' # Red (< -2%)
-    return 'color: #FFA500' # Amber (Chop)
+    if val >= 0.02: return 'color: #00FF00' 
+    elif val <= -0.02: return 'color: #FF0000' 
+    return 'color: #FFA500' 
 
 def apply_rag_formatting(df):
     """Applies RAG colors and formats floats for display."""
@@ -310,8 +317,7 @@ if st.sidebar.button("🚀 Run Live Scan"):
         if not tickers:
             st.error("No tickers loaded. Check that your .csv files are uploaded.")
         else:
-            with st.spinner("Scraping live data (4 workers)... This may take a minute."):
-                live_data = fetch_latest_data(tickers)
+            live_data = fetch_latest_data(tickers)
                 
             if live_data.empty:
                 st.error("Failed to fetch data or no stocks met liquidity requirements.")
@@ -333,9 +339,20 @@ if st.sidebar.button("🚀 Run Live Scan"):
                 # Master list processing + FinBERT
                 master = live_data.sort_values('Average_Rank', ascending=True).head(20).copy()
                 
-                with st.spinner("Running FinBERT AI on Top 20 News Headlines..."):
-                    nlp = load_finbert()
-                    master['FinBERT_Sentiment'] = master['Ticker'].apply(lambda t: analyze_sentiment(t, nlp))
+                # We need a progress bar for FinBERT because 20 network requests can take a few seconds
+                nlp = load_finbert()
+                sentiments = []
+                sentiment_bar = st.progress(0, text="Analyzing Master Consensus News Sentiment...")
+                
+                for idx, row in master.iterrows():
+                    sent = analyze_sentiment(row['Ticker'], nlp)
+                    sentiments.append(sent)
+                    # Update progress bar
+                    current_step = len(sentiments)
+                    sentiment_bar.progress(current_step / 20, text=f"Analyzing News for {row['Ticker']} ({current_step}/20)...")
+                    
+                master['FinBERT_Sentiment'] = sentiments
+                sentiment_bar.empty()
                 
                 st.success(f"Scan complete for {len(live_data)} qualifying stocks.")
                 

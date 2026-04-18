@@ -4,6 +4,8 @@ import pandas as pd
 import numpy as np
 import warnings
 import time
+import urllib.request
+import xml.etree.ElementTree as ET
 
 # Try to import FinBERT libraries, catch gracefully if not installed
 try:
@@ -26,37 +28,55 @@ def load_finbert():
     return pipeline("sentiment-analysis", model="ProsusAI/finbert")
 
 def analyze_sentiment(ticker, nlp_pipe):
-    """Fetches recent headlines safely and returns an aggregated FinBERT sentiment."""
+    """Fetches recent headlines from Yahoo, falls back to Google News, and scores with FinBERT."""
     if not nlp_pipe:
         return "No FinBERT ⚠️"
         
+    headlines = []
+    
+    # --- SOURCE 1: Try Yahoo Finance ---
     try:
         stock = yf.Ticker(ticker)
+        news = stock.news
+        time.sleep(0.5) # Gentle delay
         
-        # 1. Specifically catch yfinance fetch errors
+        if news and isinstance(news, list):
+            headlines = [
+                article.get('title') 
+                for article in news[:5] 
+                if isinstance(article, dict) and article.get('title')
+            ]
+    except Exception as e:
+        print(f"[{ticker}] YF news fetch failed: {e}")
+
+    # --- SOURCE 2: Fallback to Google News RSS ---
+    if not headlines:
         try:
-            news = stock.news
+            # Query Google News for "{Ticker} stock news"
+            url = f"https://news.google.com/rss/search?q={ticker}+stock+news&hl=en-US&gl=US&ceid=US:en"
+            # Disguise our request as a standard web browser so Google doesn't block it
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            
+            with urllib.request.urlopen(req, timeout=5) as response:
+                xml_data = response.read()
+                
+            root = ET.fromstring(xml_data)
+            
+            for item in root.findall('.//item')[:5]:
+                title_node = item.find('title')
+                if title_node is not None and title_node.text:
+                    # Clean up the " - Publisher Name" string that Google tacks onto the end of titles
+                    clean_title = title_node.text.rsplit(' - ', 1)[0]
+                    headlines.append(clean_title)
         except Exception as e:
-            print(f"[{ticker}] yfinance news fetch failed: {e}")
-            return "API Blocked ⚪"
-            
-        # 2. Bump delay to 1 full second to respect Yahoo's strict limits on the news endpoint
-        time.sleep(1.0) 
+            print(f"[{ticker}] Google News fallback failed: {e}")
+
+    # --- FINAL CHECK ---
+    if not headlines:
+        return "No Headlines ⚪"
         
-        if not news or not isinstance(news, list):
-            return "No News ⚪"
-            
-        # 3. Safely extract titles (Yahoo sometimes sneaks in ad payloads without 'title' keys)
-        headlines = [
-            article.get('title') 
-            for article in news[:5] 
-            if isinstance(article, dict) and article.get('title')
-        ]
-        
-        if not headlines:
-            return "No Headlines ⚪"
-            
-        # 4. Run through FinBERT
+    # --- RUN FINBERT ---
+    try:
         results = nlp_pipe(headlines)
         
         score = 0
@@ -74,7 +94,6 @@ def analyze_sentiment(ticker, nlp_pipe):
             return "Neutral 🟡"
             
     except Exception as e:
-        # Print exact error to your terminal/console so we aren't guessing!
         print(f"[{ticker}] FinBERT Pipeline Error: {e}")
         return "Error ⚪"
 

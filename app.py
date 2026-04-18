@@ -129,7 +129,7 @@ def fetch_latest_data(tickers):
     latest_rows = []
     
     # 1. Bump chunk size to 20 for 2x speed improvement
-    chunk_size = 20
+    chunk_size = 10
     chunks = [tickers[i:i + chunk_size] for i in range(0, len(tickers), chunk_size)]
     
     for chunk in chunks:

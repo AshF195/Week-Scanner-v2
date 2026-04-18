@@ -81,70 +81,78 @@ def get_tickers_and_names(markets):
     return list(set(tickers)), ticker_map
 
 # ==========================================
-# 3. DATA FETCHING & INDICATORS
+# 3. DATA FETCHING & INDICATORS (STEALTH MODE)
 # ==========================================
 @st.cache_data(ttl=3600)
 def fetch_latest_data(tickers):
-    # Removed 'group_by' to prevent deprecation errors in new yfinance versions
-    data = yf.download(tickers, period="6mo", threads=4, progress=False)
-    
-    if data.empty:
-        # If Yahoo blocks the IP, tell the user immediately instead of failing silently
-        st.error("⚠️ Yahoo Finance returned no data! You may be temporarily rate-limited. Try again in a few minutes.")
-        return pd.DataFrame()
-        
     latest_rows = []
     
-    for ticker in tickers:
-        try:
-            # Bulletproof MultiIndex extraction (Handles both old and new YFinance updates)
-            if isinstance(data.columns, pd.MultiIndex):
-                if ticker in data.columns.get_level_values(1):
-                    df = data.xs(ticker, axis=1, level=1).copy() # New yfinance format
+    # 1. Break the massive ticker list into safe chunks of 50 
+    # to avoid triggering Yahoo's aggressive rate limiters.
+    chunk_size = 50
+    chunks = [tickers[i:i + chunk_size] for i in range(0, len(tickers), chunk_size)]
+    
+    # 2. We remove 'threads=4' because concurrent requests trigger Yahoo's IP ban
+    for chunk in chunks:
+        # Download data for this chunk sequentially
+        data = yf.download(chunk, period="6mo", progress=False)
+        
+        if data.empty:
+            continue # If this chunk fails/rate-limits, skip and try the next one
+            
+        for ticker in chunk:
+            try:
+                # Bulletproof MultiIndex extraction (Handles both old and new YFinance updates)
+                if isinstance(data.columns, pd.MultiIndex):
+                    if ticker in data.columns.get_level_values(1):
+                        df = data.xs(ticker, axis=1, level=1).copy()
+                    else:
+                        continue
                 else:
-                    df = data[ticker].copy() # Old yfinance format
-            else:
-                df = data.copy() # Single ticker format
+                    df = data.copy() if len(chunk) == 1 else data[ticker].copy()
+                    
+                df.dropna(inplace=True)
+                if df.empty or len(df) < 50: continue
+                    
+                df['ma_20'] = df['Close'].rolling(window=20).mean()
+                df['ma_50'] = df['Close'].rolling(window=50).mean()
+                df['ema_8'] = df['Close'].ewm(span=8, adjust=False).mean()
+                df['ema_21'] = df['Close'].ewm(span=21, adjust=False).mean()
+                df['ma_20_slope'] = df['ma_20'].diff(5)
                 
-            df.dropna(inplace=True)
-            if df.empty or len(df) < 50: continue
+                ema_12 = df['Close'].ewm(span=12, adjust=False).mean()
+                ema_26 = df['Close'].ewm(span=26, adjust=False).mean()
+                df['macd'] = ema_12 - ema_26
+                df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
                 
-            df['ma_20'] = df['Close'].rolling(window=20).mean()
-            df['ma_50'] = df['Close'].rolling(window=50).mean()
-            df['ema_8'] = df['Close'].ewm(span=8, adjust=False).mean()
-            df['ema_21'] = df['Close'].ewm(span=21, adjust=False).mean()
-            df['ma_20_slope'] = df['ma_20'].diff(5)
-            
-            ema_12 = df['Close'].ewm(span=12, adjust=False).mean()
-            ema_26 = df['Close'].ewm(span=26, adjust=False).mean()
-            df['macd'] = ema_12 - ema_26
-            df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
-            
-            delta = df['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            df['rsi'] = 100 - (100 / (1 + (gain / loss)))
-            
-            df['volume_avg_20'] = df['Volume'].rolling(window=20).mean()
-            df['rvol'] = df['Volume'] / df['volume_avg_20']
-            df['volume_trend'] = df['volume_avg_20'].diff(5)
-            df['ret_5d'] = df['Close'].pct_change(5)
-            df['ret_10d'] = df['Close'].pct_change(10)
-            
-            df['high_50d'] = df['High'].rolling(window=50).max()
-            df['near_high'] = df['Close'] >= (df['high_50d'] * 0.95)
-            df['close_near_high'] = df['Close'] >= (df['High'] - 0.2 * (df['High'] - df['Low']))
-            
-            df['post_earnings'] = (df['rvol'] > 3.0) & (df['ret_5d'] > 0.05)
-            df['short_interest_proxy'] = (df['Close'] < df['ma_50']) & (df['rvol'] > 2.0)
-            
-            latest_day = df.iloc[-1:].copy()
-            latest_day['Ticker'] = ticker
-            latest_rows.append(latest_day)
-        except Exception: 
-            continue
-            
-    if not latest_rows: return pd.DataFrame()
+                delta = df['Close'].diff()
+                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                df['rsi'] = 100 - (100 / (1 + (gain / loss)))
+                
+                df['volume_avg_20'] = df['Volume'].rolling(window=20).mean()
+                df['rvol'] = df['Volume'] / df['volume_avg_20']
+                df['volume_trend'] = df['volume_avg_20'].diff(5)
+                df['ret_5d'] = df['Close'].pct_change(5)
+                df['ret_10d'] = df['Close'].pct_change(10)
+                
+                df['high_50d'] = df['High'].rolling(window=50).max()
+                df['near_high'] = df['Close'] >= (df['high_50d'] * 0.95)
+                df['close_near_high'] = df['Close'] >= (df['High'] - 0.2 * (df['High'] - df['Low']))
+                
+                df['post_earnings'] = (df['rvol'] > 3.0) & (df['ret_5d'] > 0.05)
+                df['short_interest_proxy'] = (df['Close'] < df['ma_50']) & (df['rvol'] > 2.0)
+                
+                latest_day = df.iloc[-1:].copy()
+                latest_day['Ticker'] = ticker
+                latest_rows.append(latest_day)
+            except Exception: 
+                continue
+                
+    if not latest_rows: 
+        st.error("⚠️ Yahoo Finance returned no data! You are still temporarily rate-limited. Wait 15-30 minutes and try again.")
+        return pd.DataFrame()
+        
     final_df = pd.concat(latest_rows)
     return final_df[(final_df['Close'] >= 1) & (final_df['volume_avg_20'] >= 50000)]
 

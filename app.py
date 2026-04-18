@@ -81,33 +81,41 @@ def get_tickers_and_names(markets):
     return list(set(tickers)), ticker_map
 
 # ==========================================
-# 3. DATA FETCHING & INDICATORS (STEALTH + DISGUISE MODE)
+# 3. DATA FETCHING & INDICATORS (ROBUST MODE)
 # ==========================================
-import requests
+import time
 
 @st.cache_data(ttl=3600)
 def fetch_latest_data(tickers):
     latest_rows = []
     
-    # 1. Create a custom browser session to bypass IP blocks
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    })
-    
-    chunk_size = 50
+    # 1. Reduce chunk size to 10
+    chunk_size = 10
     chunks = [tickers[i:i + chunk_size] for i in range(0, len(tickers), chunk_size)]
     
     for chunk in chunks:
-        # 2. Pass the custom session into the download function
-        data = yf.download(chunk, period="6mo", progress=False, session=session)
+        data = pd.DataFrame()
         
-        if data.empty:
-            continue 
+        # 2. Add Retry Logic (Try up to 3 times per chunk)
+        max_retries = 3
+        for attempt in range(max_retries):
+            # 3. Remove custom session, reduce period to '3mo' to lighten payload
+            data = yf.download(chunk, period="3mo", progress=False)
             
+            if not data.empty:
+                break # Success! Break out of the retry loop
+                
+            time.sleep(2) # Wait 2 seconds before retrying if it failed
+            
+        if data.empty:
+            continue # If it still failed after 3 tries, skip this chunk
+            
+        # 4. Add a 1.5-second delay between chunks to mimic human browsing
+        time.sleep(1.5)
+        
         for ticker in chunk:
             try:
-                # Bulletproof MultiIndex extraction
+                # MultiIndex extraction
                 if isinstance(data.columns, pd.MultiIndex):
                     if ticker in data.columns.get_level_values(1):
                         df = data.xs(ticker, axis=1, level=1).copy()
@@ -116,8 +124,14 @@ def fetch_latest_data(tickers):
                 else:
                     df = data.copy() if len(chunk) == 1 else data[ticker].copy()
                     
-                df.dropna(inplace=True)
-                if df.empty or len(df) < 50: continue
+                # 5. Prevent over-filtering NaNs
+                # Forward-fill missing random data, only drop if actual price/volume is missing
+                df.ffill(inplace=True)
+                df.dropna(subset=['Close', 'Volume', 'High', 'Low'], inplace=True)
+                
+                # We need at least 50 days of data for the 50-day moving averages
+                if df.empty or len(df) < 50: 
+                    continue
                     
                 df['ma_20'] = df['Close'].rolling(window=20).mean()
                 df['ma_50'] = df['Close'].rolling(window=50).mean()

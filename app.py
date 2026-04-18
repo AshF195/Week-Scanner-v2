@@ -127,6 +127,7 @@ def get_tickers_and_names(markets):
                 
     return list(set(tickers)), ticker_map
 
+
 # ==========================================
 # 3. DATA FETCHING & INDICATORS (ROBUST MODE)
 # ==========================================
@@ -141,7 +142,8 @@ def fetch_latest_data(tickers):
         max_retries = 3
         
         for attempt in range(max_retries):
-            data = yf.download(chunk, period="3mo", progress=False)
+            # Widened to 6mo to ensure plenty of historical data for the 50MA
+            data = yf.download(chunk, period="6mo", progress=False)
             if not data.empty:
                 break 
             time.sleep(2) 
@@ -164,14 +166,16 @@ def fetch_latest_data(tickers):
                 df.ffill(inplace=True)
                 df.dropna(subset=['Close', 'Volume', 'High', 'Low'], inplace=True)
                 
-                if df.empty or len(df) < 50: 
+                # Lowered the strict data cutoff from 50 to 21 to allow newer listings through
+                if df.empty or len(df) < 21: 
                     continue
                     
-                df['ma_20'] = df['Close'].rolling(window=20).mean()
-                df['ma_50'] = df['Close'].rolling(window=50).mean()
+                df['ma_20'] = df['Close'].rolling(window=20, min_periods=1).mean()
+                # min_periods=1 prevents NaN crashes on stocks slightly younger than 50 days
+                df['ma_50'] = df['Close'].rolling(window=50, min_periods=1).mean()
                 df['ema_8'] = df['Close'].ewm(span=8, adjust=False).mean()
                 df['ema_21'] = df['Close'].ewm(span=21, adjust=False).mean()
-                df['ma_20_slope'] = df['ma_20'].diff(5)
+                df['ma_20_slope'] = df['ma_20'].diff(5).fillna(0)
                 
                 ema_12 = df['Close'].ewm(span=12, adjust=False).mean()
                 ema_26 = df['Close'].ewm(span=26, adjust=False).mean()
@@ -179,19 +183,21 @@ def fetch_latest_data(tickers):
                 df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
                 
                 delta = df['Close'].diff()
-                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
                 df['rsi'] = 100 - (100 / (1 + (gain / loss)))
+                df['rsi'] = df['rsi'].fillna(50) # Neutral RSI if entirely NaN
                 
-                df['volume_avg_20'] = df['Volume'].rolling(window=20).mean()
+                df['volume_avg_20'] = df['Volume'].rolling(window=20, min_periods=1).mean()
                 df['rvol'] = df['Volume'] / (df['volume_avg_20'] + 1e-9)
-                df['volume_trend'] = df['volume_avg_20'].diff(5)
+                df['volume_trend'] = df['volume_avg_20'].diff(5).fillna(0)
                 
-                df['ret_5d'] = df['Close'].pct_change(5)
-                df['ret_10d'] = df['Close'].pct_change(10)
-                df['ret_21d'] = df['Close'].pct_change(21) # 1-Month Return
+                df['ret_5d'] = df['Close'].pct_change(5).fillna(0)
+                df['ret_10d'] = df['Close'].pct_change(10).fillna(0)
+                df['ret_21d'] = df['Close'].pct_change(21).fillna(0) 
                 
-                df['high_50d'] = df['High'].rolling(window=50).max()
+                # min_periods=1 saves newer stocks from being dropped
+                df['high_50d'] = df['High'].rolling(window=50, min_periods=1).max()
                 df['near_high'] = df['Close'] >= (df['high_50d'] * 0.95)
                 df['close_near_high'] = df['Close'] >= (df['High'] - 0.2 * (df['High'] - df['Low']))
                 
@@ -209,7 +215,9 @@ def fetch_latest_data(tickers):
         return pd.DataFrame()
         
     final_df = pd.concat(latest_rows)
-    return final_df[(final_df['Close'] >= 1) & (final_df['volume_avg_20'] >= 20000)]
+    
+    # Lowered the final liquidity traps (Close >= 0.5, Volume >= 5000)
+    return final_df[(final_df['Close'] >= 0.5) & (final_df['volume_avg_20'] >= 5000)]
 
 # ==========================================
 # 4. SCORING MODELS (SCALED / CONTINUOUS)

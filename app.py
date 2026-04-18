@@ -90,7 +90,7 @@ def get_tickers_and_names(markets):
 # ==========================================
 # 3. DATA FETCHING & INDICATORS (ROBUST MODE)
 # ==========================================
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_latest_data(tickers):
     latest_rows = []
     
@@ -98,10 +98,7 @@ def fetch_latest_data(tickers):
     chunk_size = 20
     chunks = [tickers[i:i + chunk_size] for i in range(0, len(tickers), chunk_size)]
     
-    # UI Progress Bar
-    progress_bar = st.progress(0, text="Initializing batch downloads...")
-    
-    for idx, chunk in enumerate(chunks):
+    for chunk in chunks:
         data = pd.DataFrame()
         
         # 2. Retry Logic (Try up to 3 times per chunk)
@@ -169,19 +166,12 @@ def fetch_latest_data(tickers):
             except Exception: 
                 continue
                 
-        # Update progress bar
-        progress = min((idx + 1) / len(chunks), 1.0)
-        progress_bar.progress(progress, text=f"Fetched data for {min((idx+1)*chunk_size, len(tickers))} of {len(tickers)} stocks...")
-                
-    progress_bar.empty()
-    
     if not latest_rows: 
         st.error("⚠️ Yahoo Finance returned no data! You are still temporarily rate-limited. Wait 15-30 minutes and try again.")
         return pd.DataFrame()
         
     final_df = pd.concat(latest_rows)
     return final_df[(final_df['Close'] >= 1) & (final_df['volume_avg_20'] >= 250000)]
-
 # ==========================================
 # 4. SCORING MODELS
 # ==========================================

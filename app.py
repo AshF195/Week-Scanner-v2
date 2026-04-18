@@ -287,20 +287,15 @@ def apply_rag_formatting(df):
     if 'ret_5d' in df.columns:
         styler = styler.map(color_ret, subset=['ret_5d'])
         
-    # Added Rank columns here to enforce 2 decimal places
     format_dict = {
-        'Close': '{:.2f}',
-        'rsi': '{:.1f}',
-        'rvol': '{:.2f}',
-        'ret_5d': '{:.2%}',
-        'ret_10d': '{:.2%}',
-        'ma_20': '{:.2f}',
-        'ema_8': '{:.2f}',
-        'Average_Rank': '{:.2f}',
-        'Rank_ChatGPT': '{:.2f}',
-        'Rank_Grok': '{:.2f}',
-        'Rank_Gemini': '{:.2f}',
-        'Rank_Hybrid': '{:.2f}'
+        'Close': '{:.2f}', 'rsi': '{:.1f}', 'rvol': '{:.2f}',
+        'ret_5d': '{:.2%}', 'ret_10d': '{:.2%}', 
+        'ma_20': '{:.2f}', 'ma_50': '{:.2f}', 
+        'ema_8': '{:.2f}', 'ema_21': '{:.2f}',
+        'ma_20_slope': '{:.3f}', 'macd': '{:.3f}', 'macd_signal': '{:.3f}',
+        'volume_trend': '{:.0f}',
+        'Average_Rank': '{:.2f}', 'Rank_ChatGPT': '{:.2f}',
+        'Rank_Grok': '{:.2f}', 'Rank_Gemini': '{:.2f}', 'Rank_Hybrid': '{:.2f}'
     }
     
     safe_format_dict = {k: v for k, v in format_dict.items() if k in df.columns}
@@ -403,7 +398,7 @@ if st.sidebar.button("🚀 Run Live Scan"):
                 ])
                 
                 with tab1:
-                    st.subheader("Top 20: Master Consensus + News Sentiment")
+                    st.subheader("👑 Top 20: Master Consensus + News Sentiment")
                     st.markdown("Sorted by the lowest average rank. **Sentiment is calculated from the last 5 news headlines.**")
                     master_cols = ['Ticker', 'Company', 'FinBERT_Sentiment', 'Average_Rank', 'Rank_ChatGPT', 'Rank_Grok', 'Rank_Gemini', 'Close', 'rsi', 'rvol', 'ret_5d']
                     st.dataframe(apply_rag_formatting(master[master_cols]), use_container_width=True, hide_index=True)
@@ -412,25 +407,30 @@ if st.sidebar.button("🚀 Run Live Scan"):
                     st.subheader("🤖 ChatGPT Model (Trend Focus)")
                     st.markdown("Rewards moving average strength and healthy RSI. Punishes over-extension.")
                     chatgpt_top = live_data.sort_values(by=['ChatGPT_Score', 'Average_Rank'], ascending=[False, True]).head(20)
-                    cg_cols = ['Ticker', 'Company', 'ChatGPT_Score', 'Close', 'ma_20', 'rsi', 'rvol', 'ret_5d']
+                    # Exposing everything ChatGPT evaluates
+                    cg_cols = ['Ticker', 'Company', 'Rank_ChatGPT', 'ChatGPT_Score', 'Close', 'ma_20', 'ma_20_slope', 'rsi', 'macd', 'macd_signal', 'rvol', 'volume_trend', 'ret_5d']
                     st.dataframe(apply_rag_formatting(chatgpt_top[cg_cols]), use_container_width=True, hide_index=True)
                     
                 with tab3:
                     st.subheader("🌌 Grok Model (Breakout Focus)")
                     st.markdown("Rewards strong short-term breakouts and proximity to the 50-day high.")
                     grok_top = live_data.sort_values(by=['Grok_Score', 'Average_Rank'], ascending=[False, True]).head(20)
-                    grok_cols = ['Ticker', 'Company', 'Grok_Score', 'Close', 'near_high', 'ret_10d', 'ret_5d', 'rvol', 'rsi']
+                    # Exposing everything Grok evaluates
+                    grok_cols = ['Ticker', 'Company', 'Rank_Grok', 'Grok_Score', 'Close', 'ma_20', 'ma_50', 'near_high', 'rvol', 'ret_5d', 'ret_10d']
                     st.dataframe(apply_rag_formatting(grok_top[grok_cols]), use_container_width=True, hide_index=True)
                     
                 with tab4:
                     st.subheader("✨ Gemini Model (Volume & Catalyst Focus)")
                     st.markdown("Rewards aggressive relative volume, EMA crossovers, and post-earnings setups.")
                     gemini_top = live_data.sort_values(by=['Gemini_Score', 'Average_Rank'], ascending=[False, True]).head(20)
-                    gem_cols = ['Ticker', 'Company', 'Gemini_Score', 'Close', 'ema_8', 'rvol', 'post_earnings', 'rsi', 'ret_5d']
+                    # Exposing everything Gemini evaluates
+                    gem_cols = ['Ticker', 'Company', 'Rank_Gemini', 'Gemini_Score', 'Close', 'ema_8', 'ema_21', 'macd', 'macd_signal', 'rsi', 'rvol', 'close_near_high', 'post_earnings']
                     st.dataframe(apply_rag_formatting(gemini_top[gem_cols]), use_container_width=True, hide_index=True)
                     
                 with tab5:
                     st.subheader("🧬 Hybrid V2 Model")
+                    st.markdown("The best-of-all balanced blend.")
                     hybrid_top = live_data.sort_values(by=['Hybrid_Score', 'Average_Rank'], ascending=[False, True]).head(20)
-                    hyb_cols = ['Ticker', 'Company', 'Hybrid_Score', 'Close', 'rsi', 'rvol', 'ret_10d', 'ret_5d']
+                    # Exposing everything the Hybrid evaluates
+                    hyb_cols = ['Ticker', 'Company', 'Rank_Hybrid', 'Hybrid_Score', 'Close', 'ma_20', 'ma_20_slope', 'macd', 'macd_signal', 'rsi', 'rvol', 'near_high', 'post_earnings', 'ret_5d', 'ret_10d']
                     st.dataframe(apply_rag_formatting(hybrid_top[hyb_cols]), use_container_width=True, hide_index=True)

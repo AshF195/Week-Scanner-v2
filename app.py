@@ -85,12 +85,27 @@ def get_tickers_and_names(markets):
 # ==========================================
 @st.cache_data(ttl=3600)
 def fetch_latest_data(tickers):
-    data = yf.download(tickers, period="6mo", group_by='ticker', threads=4, progress=False)
+    # Removed 'group_by' to prevent deprecation errors in new yfinance versions
+    data = yf.download(tickers, period="6mo", threads=4, progress=False)
+    
+    if data.empty:
+        # If Yahoo blocks the IP, tell the user immediately instead of failing silently
+        st.error("⚠️ Yahoo Finance returned no data! You may be temporarily rate-limited. Try again in a few minutes.")
+        return pd.DataFrame()
+        
     latest_rows = []
     
     for ticker in tickers:
         try:
-            df = data.copy() if len(tickers) == 1 else data[ticker].copy()
+            # Bulletproof MultiIndex extraction (Handles both old and new YFinance updates)
+            if isinstance(data.columns, pd.MultiIndex):
+                if ticker in data.columns.get_level_values(1):
+                    df = data.xs(ticker, axis=1, level=1).copy() # New yfinance format
+                else:
+                    df = data[ticker].copy() # Old yfinance format
+            else:
+                df = data.copy() # Single ticker format
+                
             df.dropna(inplace=True)
             if df.empty or len(df) < 50: continue
                 
@@ -126,11 +141,11 @@ def fetch_latest_data(tickers):
             latest_day = df.iloc[-1:].copy()
             latest_day['Ticker'] = ticker
             latest_rows.append(latest_day)
-        except Exception: continue
+        except Exception: 
+            continue
             
     if not latest_rows: return pd.DataFrame()
     final_df = pd.concat(latest_rows)
-    # Global liquidity filter
     return final_df[(final_df['Close'] >= 1) & (final_df['volume_avg_20'] >= 50000)]
 
 # ==========================================

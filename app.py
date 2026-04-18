@@ -120,6 +120,10 @@ def get_tickers_and_names(markets):
                         t = t.split('.')[0]
                         t = f"{t}{suffix}"
                         
+                        # --- YAHOO FINANCE FORMATTING EXCEPTIONS ---
+                        if t == "BT.L": 
+                            t = "BT-A.L"
+                        
                     tickers.append(t)
                     ticker_map[t] = str(row['Company'])
             except FileNotFoundError:

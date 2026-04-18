@@ -101,24 +101,43 @@ def analyze_sentiment(ticker, nlp_pipe):
 # 2. MARKET DATA UNIVERSE
 # ==========================================
 @st.cache_data
+@st.cache_data
 def get_tickers_and_names(markets):
     tickers, ticker_map = [], {}
+    
+    # Updated map to include the required Yahoo Finance suffix for each market
     file_map = {
-        "S&P 500": "sp500.csv", "S&P 400 (MidCap)": "sp400.csv", "S&P 600 (SmallCap)": "sp600.csv",
-        "NASDAQ 100": "nasdaq100.csv", "Dow Jones": "dow_jones.csv", "FTSE 100": "ftse100.csv",
-        "FTSE 250": "ftse250.csv", "CAC 40": "cac40.csv", "DAX 40": "dax.csv", "GETTEX (Manual)": "gettex.csv"
+        "S&P 500": ("sp500.csv", ""), 
+        "S&P 400 (MidCap)": ("sp400.csv", ""), 
+        "S&P 600 (SmallCap)": ("sp600.csv", ""),
+        "NASDAQ 100": ("nasdaq100.csv", ""), 
+        "Dow Jones": ("dow_jones.csv", ""), 
+        "FTSE 100": ("ftse100.csv", ".L"), 
+        "FTSE 250": ("ftse250.csv", ".L"), 
+        "CAC 40": ("cac40.csv", ".PA"), 
+        "DAX 40": ("dax.csv", ".DE"), 
+        "GETTEX (Manual)": ("gettex.csv", ".DE") # Defaulting to .DE for German liquidity
     }
+    
     for market in markets:
-        filename = file_map.get(market)
-        if filename:
+        market_info = file_map.get(market)
+        if market_info:
+            filename, suffix = market_info
             try:
                 df = pd.read_csv(filename)
                 for _, row in df.iterrows():
-                    t = str(row['Ticker'])
+                    # Clean up any accidental spaces in the CSV
+                    t = str(row['Ticker']).strip()
+                    
+                    # Auto-append the suffix if it belongs to an EU market AND doesn't already have it
+                    if suffix and not t.endswith(suffix):
+                        t = f"{t}{suffix}"
+                        
                     tickers.append(t)
                     ticker_map[t] = str(row['Company'])
             except FileNotFoundError:
                 st.error(f"⚠️ Could not find '{filename}'.")
+                
     return list(set(tickers)), ticker_map
 
 # ==========================================

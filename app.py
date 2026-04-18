@@ -243,6 +243,11 @@ def color_ret(val):
 
 def apply_rag_formatting(df):
     """Applies RAG colors and formats floats for display safely."""
+    
+    # FIX: Pandas Styler crashes if the DataFrame has duplicate indices 
+    # (like identical dates carried over from yfinance). We must reset it first.
+    df = df.reset_index(drop=True)
+    
     styler = df.style
     
     # Safely apply color mapping only if the column exists in this specific view
